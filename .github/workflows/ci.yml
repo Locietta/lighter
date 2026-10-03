@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch supersedes any run still in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          cache: true
+          cache-write: false
+      - run: pixi run format-check
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (gcc)
+            os: ubuntu-latest
+            cache: ~/.xmake/packages
+            cache-write: true
+            configure: xmake f -m releasedbg --sanitizers=n -y
+            build: build
+            test: test-all
+          - name: Windows (mingw)
+            os: windows-latest
+            cache: ~/AppData/Local/.xmake/packages
+            cache-write: true
+            configure: xmake f -m releasedbg --sanitizers=n -y
+            build: build
+            test: test-all
+          - name: Linux release (gcc)
+            os: ubuntu-latest
+            cache: ~/.xmake/packages
+            cache-write: false
+            configure: xmake f -m release --sanitizers=n -y
+            build: build
+            test: test-all
+          - name: Windows release (mingw)
+            os: windows-latest
+            cache: ~/AppData/Local/.xmake/packages
+            cache-write: false
+            configure: xmake f -m release --sanitizers=n -y
+            build: build
+            test: test-all
+          - name: Linux sanitizers (gcc)
+            os: ubuntu-latest
+            cache: ~/.xmake/packages
+            cache-write: false
+            configure: xmake f -m releasedbg --sanitizers=y -y
+            build: xmake build -y
+            test: xmake test -vvvD
+    steps:
+      # xmake/ is a submodule holding the pinned package recipes, the custom
+      # package managers and the build rules; without it xmake cannot configure.
+      - uses: actions/checkout@main
+        with:
+          submodules: true
+
+      # pixi provides everything the build needs: the GCC 16 toolchain (the only
+      # one shipping -freflection and contracts) and the C dependencies. xmake is deliberately NOT a pixi
+      # dependency - it writes a global config that the system xmake shares, so a
+      # second copy inside the environment would clash with it for no gain.
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          cache: true
+          cache-write: ${{ matrix.cache-write }}
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+
+      # Only the header-only packages (glaze, ...) are built from source; the
+      # rest come from the pixi environment.
+      - name: Cache xmake packages
+        uses: actions/cache@main
+        with:
+          path: ${{ matrix.cache }}
+          key: xmake-${{ runner.os }}-${{ hashFiles('xmake/packages/**/xmake.lua') }}
+          restore-keys: xmake-${{ runner.os }}-
+
+      # The toolchain and the C dependencies both live in the pixi environment,
+      # so every xmake invocation has to run under `pixi run`. On Windows this
+      # also selects xmake's `mingw` platform (see the root xmake.lua).
+      - name: Configure
+        run: pixi run ${{ matrix.configure }}
+
+      - name: Build
+        run: pixi run ${{ matrix.build }}
+
+      - name: Test
+        run: pixi run ${{ matrix.test }}

@@ -1,0 +1,16 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# clangd
+.cache
+.clice
+
+build*/
+dist/
+.xmake/
+
+__pycache__/
+
+# clangd compile database (xmake project -k compile_commands)
+compile_commands.json
