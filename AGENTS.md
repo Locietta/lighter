@@ -12,6 +12,6 @@ Compiler toolchain, C dependencies and python tools are managed by pixi:
 
 C++ dependencies should be managed by xmake. Headers and module interfaces must remain platform-neutral; include Windows SDK and POSIX headers only from implementation units.
 
-Consumers pin a released version. When the public API changes, release a new version: tag it, update the recipe's `add_versions` in `Locietta/xmake-repo`, and bump the consumers. Consumers can build against a local checkout with `LIGHTER_SOURCE_DIR`.
+Versions follow semver (0.x for now: breaking changes bump the minor). Consumers pin a released version. To release: bump `version` in `pixi.toml`, tag `vX.Y.Z`, update the recipe's `add_versions` in `Locietta/xmake-repo`, and bump the consumers. Consumers can build against a local checkout with `LIGHTER_SOURCE_DIR`.
 
 Commit headlines follow `<type>(<scope>): <subject>`.
