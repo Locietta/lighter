@@ -160,6 +160,13 @@ struct Outcome<T, void, void> {
 private:
     using stored_type = std::conditional_t<std::is_void_v<T>, std::type_identity<void>, T>;
 
+    // Same contract as the general Outcome's member_ref_t: value() keeps the
+    // cv/ref category of *this, so an lvalue yields T& and a move-only T can
+    // be moved out of an rvalue. (decltype(auto) on the unparenthesized
+    // member would return T by value and copy.)
+    template <typename Self>
+    using data_ref_t = decltype((std::declval<Self &&>().data));
+
 public:
     using value_type = T;
     using error_type = void;
@@ -184,7 +191,7 @@ public:
 
     template <typename Self>
     [[nodiscard]]
-    decltype(auto) value(this Self &&self)
+    data_ref_t<Self> value(this Self &&self)
         requires(!std::is_void_v<T>)
     {
         return std::forward<Self>(self).data;
