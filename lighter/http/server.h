@@ -68,7 +68,9 @@ using Handler = std::move_only_function<Task<ServerResponse>(ServerRequest)>;
 /// Requests on one connection are answered in order; connections are served
 /// concurrently as children of serve(). Cancelling serve() cancels every
 /// handler. stop() is the graceful path: it stops accepting, closes idle
-/// connections and lets requests in flight finish.
+/// connections and lets requests in flight finish; once serve() returns the
+/// listening socket is closed. (After a cancelled serve() the socket stays
+/// open until the Server is destroyed.)
 ///
 /// The Server must outlive serve().
 struct Server {

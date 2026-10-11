@@ -335,8 +335,9 @@ Task<void, lighter::Error> accept_connections(Server::Self &server, TaskGroup<li
         auto accepted = co_await server.acceptor.accept();
         if (!accepted) {
             if (server.stopping) {
-                co_return;
+                break;
             }
+            server.acceptor = {};
             co_await fail(accepted.error());
         }
         // Dropping the stream closes it.
@@ -345,6 +346,9 @@ Task<void, lighter::Error> accept_connections(Server::Self &server, TaskGroup<li
         }
         group.spawn(serve_connection(server, std::move(*accepted), handler));
     }
+    // No accept is pending any more: close the listening socket, so a stopped
+    // server neither queues new connections nor keeps the loop running.
+    server.acceptor = {};
 }
 
 } // namespace

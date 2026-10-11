@@ -295,5 +295,19 @@ int main() {
         require(served.has_value(), "serve() failed");
     });
 
+    {
+        // A stopped server closes its socket even while the Server object
+        // lives on, so the loop runs out of work and returns.
+        std::printf("scenario server outlives serve\n");
+        EventLoop loop;
+        auto server = http::Server::listen("127.0.0.1", 0, {}, loop);
+        require(server.has_value(), "failed to listen");
+        auto body = [&]() -> Task<> { co_await exercise(*server, echo, client_basics(*server)); };
+        auto task = body();
+        loop.schedule(task);
+        loop.run();
+        std::ignore = task.value();
+    }
+
     return 0;
 }
