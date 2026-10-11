@@ -177,6 +177,9 @@ struct Tcp : Stream {
 
     /// Query the local address/port of a listening Acceptor.
     static Result<i32> local_port(Acceptor &acc);
+
+    /// Enable or disable Nagle's algorithm (TCP_NODELAY) on a connected socket.
+    Error set_nodelay(bool enabled);
 };
 
 } // namespace lighter

@@ -6,4 +6,6 @@
 #include <lighter/http/event_stream.h>
 #include <lighter/http/json.h>
 #include <lighter/http/response.h>
+#include <lighter/http/server.h>
 #include <lighter/http/streaming.h>
+#include <lighter/http/types.h>

@@ -14,6 +14,7 @@
 #include <lighter/async/runtime/debug.h>
 #include <lighter/async/runtime/interrupt.h>
 #include <lighter/async/runtime/node.h>
+#include <lighter/async/runtime/oneshot.h>
 #include <lighter/async/runtime/sync.h>
 #include <lighter/async/runtime/task.h>
 #include <lighter/async/runtime/task_group.h>

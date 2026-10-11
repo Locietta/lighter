@@ -385,6 +385,14 @@ Task<Tcp, Error> Tcp::connect(std::string_view host, i32 port, EventLoop &loop) 
     co_return co_await ConnectAwait<Tcp>{std::move(self), host, port};
 }
 
+Error Tcp::set_nodelay(bool enabled) {
+    if (!self) {
+        return Error::k_invalid_argument;
+    }
+
+    return uv::tcp_nodelay(self->tcp, enabled);
+}
+
 Result<Tcp::Acceptor> Tcp::listen(std::string_view host, i32 port, Tcp::Options opts, EventLoop &loop) {
     auto self = Tcp::Acceptor::Self::make();
     if (auto err = uv::tcp_init(loop, self->tcp)) {

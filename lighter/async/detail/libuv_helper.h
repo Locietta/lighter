@@ -273,6 +273,10 @@ ALWAYS_INLINE Error tcp_init(uv_loop_t &loop, uv_tcp_t &handle) noexcept { retur
 
 ALWAYS_INLINE Error tcp_open(uv_tcp_t &handle, uv_os_sock_t sock) noexcept { return status_to_error(::uv_tcp_open(&handle, sock)); }
 
+ALWAYS_INLINE Error tcp_nodelay(uv_tcp_t &handle, bool enable) noexcept {
+    return status_to_error(::uv_tcp_nodelay(&handle, enable ? 1 : 0));
+}
+
 ALWAYS_INLINE Error tcp_bind(uv_tcp_t &handle, const sockaddr *addr, u32 flags) noexcept pre(addr != nullptr) {
     return status_to_error(::uv_tcp_bind(&handle, addr, flags));
 }
