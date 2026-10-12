@@ -23,15 +23,23 @@ concept fs_result_populator = std::move_constructible<Populate> && requires(Popu
     { populate(req) } -> std::convertible_to<Result<FsResult>>;
 };
 
-template <typename FsResult, fs_result_populator<FsResult> Populate>
-struct FsOp : uv::AwaitOp<FsOp<FsResult, Populate>> {
+/// Release hook for operations whose success acquires nothing.
+struct NoRelease {
+    void operator()(uv_fs_t &) const noexcept {}
+};
+
+template <typename FsResult, fs_result_populator<FsResult> Populate, typename Release = NoRelease>
+struct FsOp : uv::AwaitOp<FsOp<FsResult, Populate, Release>> {
     using promise_t = Task<FsResult, Error>::promise_type;
 
     uv_fs_t req = {};
     Populate populate;
+    // Undoes what a successful request acquired (fd, temp file, uv_dir_t)
+    // when nobody is left to receive the result.
+    Release release;
     Result<FsResult> out = outcome_error(Error());
 
-    explicit FsOp(Populate &&populate) : populate(std::move(populate)) {}
+    FsOp(Populate &&populate, Release &&release) : populate(std::move(populate)), release(std::move(release)) {}
 
     static void on_cancel(IoOp *op) {
         auto *self = static_cast<FsOp *>(op);
@@ -93,10 +101,10 @@ static Result<i32> to_uv_copyfile_flags(const fs::CopyfileOptions &options) {
     return static_cast<i32>(out);
 }
 
-template <typename Result, typename Submit, fs_result_populator<Result> Populate>
-static Task<Result, Error> run_fs(Submit submit, Populate populate, [[maybe_unused]] EventLoop &loop = EventLoop::current()) {
-    using Op = FsOp<Result, Populate>;
-    Op op{std::move(populate)};
+template <typename Result, typename Submit, fs_result_populator<Result> Populate, typename Release = NoRelease>
+static Task<Result, Error> run_fs(Submit submit, Populate populate, [[maybe_unused]] EventLoop &loop, Release release = {}) {
+    using Op = FsOp<Result, Populate, Release>;
+    Op op{std::move(populate), std::move(release)};
 
     auto after_cb = [](uv_fs_t *req) {
         auto *h = static_cast<Op *>(req->data);
@@ -106,6 +114,11 @@ static Task<Result, Error> run_fs(Submit submit, Populate populate, [[maybe_unus
 
         if (req->result < 0) {
             h->out = outcome_error(uv::status_to_error(req->result));
+        } else if (h->is_cancelled()) {
+            // uv_cancel() lost the race: the request already ran to
+            // completion, but the op is CANCELLED and its result will be
+            // dropped. Release what it acquired instead of leaking it.
+            h->release(*req);
         } else {
             h->out = h->populate(*req);
         }
@@ -124,6 +137,43 @@ static Task<Result, Error> run_fs(Submit submit, Populate populate, [[maybe_unus
     }
 
     co_return co_await op;
+}
+
+// Synchronous cleanup for results nobody will receive. These run on the loop
+// thread, only on the rare cancel-lost-the-race path, and errors are ignored
+// because there is no one left to report them to.
+
+void discard_fd(uv_file fd) noexcept {
+    uv_fs_t req{};
+    uv::fs_close_sync(req, fd);
+    uv::fs_req_cleanup(req);
+}
+
+void discard_file(const char *path) noexcept {
+    if (path == nullptr) {
+        return;
+    }
+    uv_fs_t req{};
+    uv::fs_unlink_sync(req, path);
+    uv::fs_req_cleanup(req);
+}
+
+void discard_directory(const char *path) noexcept {
+    if (path == nullptr) {
+        return;
+    }
+    uv_fs_t req{};
+    uv::fs_rmdir_sync(req, path);
+    uv::fs_req_cleanup(req);
+}
+
+void discard_dir_handle(uv_dir_t *dir) noexcept {
+    if (dir == nullptr) {
+        return;
+    }
+    uv_fs_t req{};
+    uv::fs_closedir_sync(req, *dir);
+    uv::fs_req_cleanup(req);
 }
 
 template <typename Submit>
@@ -303,8 +353,12 @@ Task<void, Error> fs::closedir(fs::DirHandle &dir, EventLoop &loop) {
         co_await fail(Error::k_invalid_argument);
     }
 
-    co_await run_void_fs(
-        [&](uv_fs_t &req, uv_fs_cb cb) { return uv::fs_closedir(loop, req, *static_cast<uv_dir_t *>(dir.native_handle()), cb); }, loop)
+    co_await run_fs<i32>(
+        [&](uv_fs_t &req, uv_fs_cb cb) { return uv::fs_closedir(loop, req, *static_cast<uv_dir_t *>(dir.native_handle()), cb); },
+        [](uv_fs_t &) { return 0; }, loop,
+        // A cancel that lost the race still freed the native handle; forget it
+        // so it is never closed twice.
+        [&dir](uv_fs_t &) noexcept { dir.reset(); })
         .or_fail();
     dir.reset();
 }
@@ -337,13 +391,18 @@ Task<fs::FileStats, Error> fs::lstat(std::string_view path, EventLoop &loop) {
 Task<std::string, Error> fs::mkdtemp(std::string_view tpl, EventLoop &loop) {
     return run_fs<std::string>(
         [t = std::string(tpl), &loop](uv_fs_t &req, uv_fs_cb cb) { return uv::fs_mkdtemp(loop, req, t.c_str(), cb); },
-        [](uv_fs_t &req) -> std::string { return req.path ? req.path : ""; }, loop);
+        [](uv_fs_t &req) -> std::string { return req.path ? req.path : ""; }, loop,
+        [](uv_fs_t &req) noexcept { discard_directory(req.path); });
 }
 
 Task<fs::MkstempResult, Error> fs::mkstemp(std::string_view tpl, EventLoop &loop) {
     return run_fs<fs::MkstempResult>(
         [t = std::string(tpl), &loop](uv_fs_t &req, uv_fs_cb cb) { return uv::fs_mkstemp(loop, req, t.c_str(), cb); },
-        [](uv_fs_t &req) -> fs::MkstempResult { return {static_cast<i32>(req.result), req.path ? req.path : ""}; }, loop);
+        [](uv_fs_t &req) -> fs::MkstempResult { return {static_cast<i32>(req.result), req.path ? req.path : ""}; }, loop,
+        [](uv_fs_t &req) noexcept {
+            discard_fd(static_cast<uv_file>(req.result));
+            discard_file(req.path);
+        });
 }
 
 Task<i64, Error> fs::sendfile(i32 out_fd, i32 in_fd, i64 in_offset, usize length, EventLoop &loop) {
@@ -407,7 +466,8 @@ Task<fs::FsStats, Error> fs::statfs(std::string_view path, EventLoop &loop) {
 Task<i32, Error> fs::open(std::string_view path, i32 flags, i32 mode, EventLoop &loop) {
     return run_fs<i32>([p = std::string(path), flags, mode,
                         &loop](uv_fs_t &req, uv_fs_cb cb) { return uv::fs_open(loop, req, p.c_str(), flags, mode, cb); },
-                       [](uv_fs_t &req) -> i32 { return static_cast<i32>(req.result); }, loop);
+                       [](uv_fs_t &req) -> i32 { return static_cast<i32>(req.result); }, loop,
+                       [](uv_fs_t &req) noexcept { discard_fd(static_cast<uv_file>(req.result)); });
 }
 
 Task<usize, Error> fs::read(i32 fd, std::span<char> buf, i64 offset, EventLoop &loop) {
@@ -460,7 +520,8 @@ Task<std::vector<fs::Dirent>, Error> fs::scandir(std::string_view path, EventLoo
 Task<fs::DirHandle, Error> fs::opendir(std::string_view path, EventLoop &loop) {
     return run_fs<fs::DirHandle>(
         [p = std::string(path), &loop](uv_fs_t &req, uv_fs_cb cb) { return uv::fs_opendir(loop, req, p.c_str(), cb); },
-        [](uv_fs_t &req) { return fs::DirHandle::from_native(req.ptr); }, loop);
+        [](uv_fs_t &req) { return fs::DirHandle::from_native(req.ptr); }, loop,
+        [](uv_fs_t &req) noexcept { discard_dir_handle(static_cast<uv_dir_t *>(req.ptr)); });
 }
 
 Task<std::vector<fs::Dirent>, Error> fs::readdir(fs::DirHandle &dir, EventLoop &loop) {

@@ -629,6 +629,16 @@ ALWAYS_INLINE i32 fs_write_sync(uv_fs_t &req, uv_file file, const uv_buf_t bufs[
 
 ALWAYS_INLINE i32 fs_close_sync(uv_fs_t &req, uv_file file) noexcept { return ::uv_fs_close(nullptr, &req, file, nullptr); }
 
+ALWAYS_INLINE i32 fs_unlink_sync(uv_fs_t &req, const char *path) noexcept pre(path != nullptr) {
+    return ::uv_fs_unlink(nullptr, &req, path, nullptr);
+}
+
+ALWAYS_INLINE i32 fs_rmdir_sync(uv_fs_t &req, const char *path) noexcept pre(path != nullptr) {
+    return ::uv_fs_rmdir(nullptr, &req, path, nullptr);
+}
+
+ALWAYS_INLINE i32 fs_closedir_sync(uv_fs_t &req, uv_dir_t &dir) noexcept { return ::uv_fs_closedir(nullptr, &req, &dir, nullptr); }
+
 #undef ALWAYS_INLINE
 
 struct ResolvedAddr {
