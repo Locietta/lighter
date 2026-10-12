@@ -50,7 +50,9 @@ struct StreamingResponse {
     std::vector<Header> headers;
 
     StreamingResponse(StreamingResponse &&) noexcept = default;
-    StreamingResponse &operator=(StreamingResponse &&) noexcept = default;
+    /// Aborts this object's own transfer, as destruction would, before taking
+    /// over `other`'s.
+    StreamingResponse &operator=(StreamingResponse &&other) noexcept;
     StreamingResponse(const StreamingResponse &) = delete;
     StreamingResponse &operator=(const StreamingResponse &) = delete;
 
@@ -74,6 +76,9 @@ private:
     friend Task<StreamingResponse, Error> detail::execute_stream_request(http::Request request, EventLoop &loop);
 
     explicit StreamingResponse(detail::InflightRequestRef state) noexcept;
+
+    /// Detaches and releases the transfer; a no-op once moved from.
+    void abort_transfer() noexcept;
 
     detail::InflightRequestRef state;
 };

@@ -95,13 +95,27 @@ StreamingResponse::StreamingResponse(detail::InflightRequestRef state_ref) noexc
     }
 }
 
-StreamingResponse::~StreamingResponse() {
+StreamingResponse &StreamingResponse::operator=(StreamingResponse &&other) noexcept {
+    if (this != &other) {
+        abort_transfer();
+        status = other.status;
+        url = std::move(other.url);
+        headers = std::move(other.headers);
+        state = std::move(other.state);
+    }
+    return *this;
+}
+
+StreamingResponse::~StreamingResponse() { abort_transfer(); }
+
+void StreamingResponse::abort_transfer() noexcept {
     if (!state) {
         return; // moved-from
     }
     state->detach_from_multi();
     state->release_request();
     state->completed = true;
+    state.reset();
 }
 
 std::optional<std::string_view> StreamingResponse::header_value(std::string_view name) const noexcept {
