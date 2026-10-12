@@ -102,7 +102,7 @@ void Parser::process_line(std::string_view line) {
     } else if (field == "id") {
         // an id containing NUL is ignored per spec
         if (value.find('\0') == std::string_view::npos) {
-            last_id.assign(value);
+            id_buffer.assign(value);
         }
     } else if (field == "retry") {
         u64 ms = 0;
@@ -116,6 +116,9 @@ void Parser::process_line(std::string_view line) {
 }
 
 void Parser::dispatch() {
+    // the source's last event ID changes here, data or not (spec step 1)
+    last_id = id_buffer;
+
     // a blank line with no accumulated data dispatches nothing, but the event
     // type buffer still resets (spec steps for "dispatch the event")
     if (!has_data) {

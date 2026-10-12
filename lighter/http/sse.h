@@ -41,7 +41,9 @@ struct Parser {
 
     usize max_bytes() const noexcept { return max_event_bytes; }
 
-    /// Last seen `id:` field value (survives event boundaries, per spec).
+    /// The last event ID as of the latest dispatch (blank line): per spec an
+    /// `id:` field takes effect when its event is dispatched, and persists
+    /// across later events. Ids of events still queued for next() count.
     std::string_view last_event_id() const noexcept { return last_id; }
 
     /// Last valid `retry:` field value in milliseconds, if any was seen.
@@ -56,7 +58,8 @@ private:
     std::string event_type;
     std::string data;
     bool has_data = false;
-    std::string last_id;
+    std::string id_buffer; // the spec's "last event ID buffer"
+    std::string last_id;   // the source's last event ID, set on dispatch
     std::optional<u64> retry;
     usize max_event_bytes;
     bool overflow = false;

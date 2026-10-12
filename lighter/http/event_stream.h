@@ -43,7 +43,8 @@ struct EventStream {
         }
     }
 
-    /// Last seen `id:` value - reconnection metadata for the caller.
+    /// Last event ID as of the latest dispatch - reconnection metadata for the
+    /// caller (see Parser::last_event_id()).
     std::string_view last_event_id() const noexcept { return parser.last_event_id(); }
 
     /// Last seen `retry:` value in milliseconds, if any.
