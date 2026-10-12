@@ -117,6 +117,10 @@ void unpublish(ControlEventSource::Self &self) noexcept {
 
 std::atomic<u32> g_windows_source_count{0};
 
+/// How long a terminating console control (close, logoff, shutdown) holds
+/// the process open for the application to handle it.
+constexpr DWORD k_close_grace_ms = 4500;
+
 std::optional<ControlEventKind> from_windows_control(DWORD value) noexcept {
     switch (value) {
         case CTRL_C_EVENT: return ControlEventKind::INTERRUPT;
@@ -146,6 +150,18 @@ BOOL WINAPI control_handler(DWORD value) {
     }
 
     g_active_handlers.fetch_sub(1, std::memory_order_release);
+
+    // For close, logoff and shutdown Windows terminates the process as soon
+    // as the handler returns, which would kill it before the loop even saw
+    // the event. Hold this system-created handler thread instead so the event
+    // reaches the loop and the application can shut down; when the process
+    // exits on its own, this thread simply ends with it. The wait runs after
+    // the handler count is released, so destroying a ControlEventSource
+    // during that shutdown does not block on it, and it stays below the
+    // ~5 s after which Windows kills the process anyway.
+    if (handled && value != CTRL_C_EVENT && value != CTRL_BREAK_EVENT) {
+        Sleep(k_close_grace_ms);
+    }
     return handled ? TRUE : FALSE;
 }
 

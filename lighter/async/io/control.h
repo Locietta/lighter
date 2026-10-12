@@ -32,6 +32,10 @@ bool control_event_supported(ControlEventKind kind) noexcept;
 /// POSIX uses sigaction plus an async-signal-safe self-pipe. Windows uses
 /// SetConsoleCtrlHandler plus kernel events. Native worker threads only wait
 /// and normalize events; Relay transfers delivery to the Event-loop thread.
+///
+/// Windows terminates the process once a console close (HANGUP) handler
+/// returns, so the handler holds the process open for about 4.5 seconds,
+/// just under the system's own limit; shut down within that window.
 struct ControlEventSource {
     ControlEventSource() noexcept;
 
