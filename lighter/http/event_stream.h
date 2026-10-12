@@ -1,5 +1,6 @@
 #pragma once
 
+#include <format>
 #include <optional>
 #include <utility>
 
@@ -13,16 +14,22 @@ namespace lighter::http::sse {
 /// Async SSE event source over a StreamingResponse.
 ///
 /// next() returns the next event, nullopt when the server closed the stream
-/// cleanly, or an Error on transport failure. Cancellation propagates through
-/// next(); unwinding destroys the owned StreamingResponse, which aborts the
-/// transfer - no explicit shutdown call exists or is needed.
+/// cleanly, or an Error on transport failure. An event larger than
+/// `max_event_bytes` fails next() with CURLE_TOO_LARGE, and every later call
+/// too. Cancellation propagates through next(); unwinding destroys the owned
+/// StreamingResponse, which aborts the transfer - no explicit shutdown call
+/// exists or is needed.
 struct EventStream {
-    explicit EventStream(StreamingResponse response) noexcept : response(std::move(response)) {}
+    explicit EventStream(StreamingResponse response, usize max_event_bytes = Parser::k_default_max_event_bytes) noexcept
+        : response(std::move(response)), parser(max_event_bytes) {}
 
     Task<std::optional<Event>, Error> next() {
         while (true) {
             if (auto event = parser.next()) {
                 co_return event;
+            }
+            if (parser.overflowed()) {
+                co_await fail(Error::from_curl(CURLE_TOO_LARGE, std::format("server-sent event exceeds {} bytes", parser.max_bytes())));
             }
 
             auto chunk = co_await response.read_chunk().or_fail();

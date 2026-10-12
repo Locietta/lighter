@@ -12,6 +12,9 @@ constexpr std::string_view k_bom = "\xEF\xBB\xBF";
 } // namespace
 
 void Parser::feed(std::string_view bytes) {
+    if (overflow) {
+        return;
+    }
     if (!seen_first_byte && !bytes.empty()) {
         // A single leading UTF-8 BOM must be ignored (spec: "one leading
         // U+FEFF"). It can only occur at the very start of the stream, but may
@@ -53,6 +56,16 @@ void Parser::feed(std::string_view bytes) {
             skip_next_lf = true; // swallow the LF of a CRLF pair, even across chunks
         } else {
             pending.push_back(c);
+        }
+        // A hostile or broken server must not grow memory without bound.
+        // event_type and the id each hold at most one line, so this caps
+        // the whole event at a small multiple of the limit.
+        if (pending.size() + data.size() > max_event_bytes) {
+            overflow = true;
+            pending.clear();
+            data.clear();
+            has_data = false;
+            return;
         }
     }
 }

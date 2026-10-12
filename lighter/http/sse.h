@@ -23,11 +23,23 @@ struct Event {
 };
 
 struct Parser {
-    /// Consume a chunk of the stream. Complete events become available via next().
+    constexpr static usize k_default_max_event_bytes = 16 * 1024 * 1024;
+
+    /// `max_event_bytes` bounds the event being assembled: its pending line
+    /// plus its data so far. A stream that exceeds it overflows the parser.
+    explicit Parser(usize max_event_bytes = k_default_max_event_bytes) noexcept : max_event_bytes(max_event_bytes) {}
+
+    /// Consume a chunk of the stream. Complete events become available via
+    /// next(). Ignored once overflowed(); events dispatched before stay queued.
     void feed(std::string_view bytes);
 
     /// Pop the next dispatched event, or nullopt when all fed input is drained.
     std::optional<Event> next();
+
+    /// An event outgrew `max_event_bytes`; the parser has stopped consuming.
+    bool overflowed() const noexcept { return overflow; }
+
+    usize max_bytes() const noexcept { return max_event_bytes; }
 
     /// Last seen `id:` field value (survives event boundaries, per spec).
     std::string_view last_event_id() const noexcept { return last_id; }
@@ -46,6 +58,8 @@ private:
     bool has_data = false;
     std::string last_id;
     std::optional<u64> retry;
+    usize max_event_bytes;
+    bool overflow = false;
     bool seen_first_byte = false; // for BOM stripping
     bool skip_next_lf = false;    // CRLF split across a feed() boundary
 };
