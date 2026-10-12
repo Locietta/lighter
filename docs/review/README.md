@@ -5,13 +5,14 @@ docs are a scratchpad to revisit after the lexer split and the test cleanup;
 delete each file once its issues are resolved or moved to an issue tracker.
 The lexer findings (`LX-*`) moved with the lexer to lilac's `docs/review/lexer.md`.
 
-| File                     | Area                                                                  |
-| ------------------------ | --------------------------------------------------------------------- |
-| [runtime.md](runtime.md) | coroutine runtime, cancellation, loop, Relay                          |
-| [io.md](io.md)           | libuv I/O layer: stream, udp, fs, process, watcher, terminal, control |
-| [http.md](http.md)       | curl client, streaming/SSE, HTTP/1.1 server, oneshot                  |
-| [utils.md](utils.md)     | containers, encoding, codecs, mock, panic                             |
-| [tests.md](tests.md)     | coverage gaps, input for the test audit                               |
+| File                           | Area                                                                  |
+| ------------------------------ | --------------------------------------------------------------------- |
+| [runtime.md](runtime.md)       | coroutine runtime, cancellation, loop, Relay                          |
+| [io.md](io.md)                 | libuv I/O layer: stream, udp, fs, process, watcher, terminal, control |
+| [http.md](http.md)             | curl client, streaming/SSE, HTTP/1.1 server, oneshot                  |
+| [utils.md](utils.md)           | containers, encoding, codecs, mock, panic                             |
+| [tests.md](tests.md)           | coverage gaps, input for the test audit                               |
+| [test-audit.md](test-audit.md) | per-test verdicts, applied cleanups, missing tests                    |
 
 ## Conventions
 
@@ -28,7 +29,7 @@ The lexer findings (`LX-*`) moved with the lexer to lilac's `docs/review/lexer.m
 ## Priority order
 
 1. HTTP-1 (server stop UAF), HTTP-2 (slowloris / no write timeout)
-2. RT-7 (Relay release order), RT-1 (cross-thread cancel)
+2. RT-7 (Relay release order), RT-1 (cross-thread cancel), RT-11 (swallowed root task failures)
 3. IO-1 (timer cancel), IO-3 (fs cancel leak), IO-4 (owner destroyed while awaited)
 4. UT-1..UT-5 (SmallVector), with tests
 5. Runtime test suite (see tests.md)

@@ -32,7 +32,8 @@ Input for the test audit (lighter + liminal). Status as of `584438d`.
   `wait()`, no Oneshot destroyed before the send arrives.
 - **test-transcode**: no output > 4096 bytes (the E2BIG refill loop), no
   `to_utf8`, no UTF-16 errors (UT-6), no stateful targets (UT-7).
-- **FlatMap**: no throwing types.
+- **FlatMap**: only a throwing copy during growth; no throwing constructor in
+  `try_emplace` / `insert`.
 - **test-mock**: no swallowed unexpected call (UT-8), no action after a call (UT-9).
 
 ## Audit questions (to answer per test, lighter and liminal)

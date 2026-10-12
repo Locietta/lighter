@@ -96,6 +96,20 @@ Scope: `lighter/async/runtime/*`, `lighter/async/io/loop.*`,
   this. Today the only escape is `catch_cancel()` around the work.
 - Fix: decide whether a `shield(task)` combinator is wanted.
 
+## RT-11 Failures of detached root tasks are silently discarded
+
+- Severity: medium · Verification: verified
+- Where: `io/loop.h:159-169` (`schedule(rvalue)` sets `root`),
+  `runtime/task.h:98-129` (`TransitionAwait`), `runtime/node.cpp:328-341` (`finalize`)
+- Problem: a root task that throws stores the exception in its promise, ends
+  FAILED, and `finalize()` destroys the frame with no parent to deliver to. The
+  exception (or a structured Error from `Task<T, Error>`) is never reported. Found
+  through the tests: `require()` failures inside rvalue-scheduled tasks in
+  test-task-group, test-timeout, test-timer and test-control are swallowed; those
+  tests only pass because they check flags after `run()`.
+- Fix: decide a policy for unobserved root failures, e.g. rethrow from `run()`,
+  call a loop-level handler, or `panic` in dev builds. At minimum log them.
+
 ## RT-10 `~EventLoop` never destroys suspended root task frames
 
 - Severity: low · Verification: verified
