@@ -110,6 +110,10 @@ struct DirHandle {
     DirHandle(const DirHandle &) = delete;
     DirHandle &operator=(const DirHandle &) = delete;
 
+    /// Closes a still-open directory synchronously; prefer closedir() to
+    /// close it without blocking the loop.
+    ~DirHandle();
+
     bool valid() const noexcept;
     void *native_handle() const noexcept;
     void reset() noexcept;
@@ -117,9 +121,14 @@ struct DirHandle {
     static DirHandle from_native(void *ptr);
 
 private:
+    friend Task<std::vector<Dirent>, Error> readdir(DirHandle &dir, EventLoop &loop);
+    friend Task<void, Error> closedir(DirHandle &dir, EventLoop &loop);
+
     explicit DirHandle(void *ptr);
 
     void *dir = nullptr;
+    /// A readdir() is in flight; it owns the native entry buffer until done.
+    bool reading = false;
 };
 
 /// Remove a file.
@@ -150,7 +159,9 @@ Task<std::vector<Dirent>, Error> scandir(std::string_view path, EventLoop &loop 
 /// Open a directory for iterative reading.
 Task<DirHandle, Error> opendir(std::string_view path, EventLoop &loop = EventLoop::current());
 
-/// Read a batch of entries from an opened directory.
+/// Read a batch of entries from an opened directory. One read at a time per
+/// handle: a concurrent readdir() or closedir() fails with
+/// k_connection_already_in_progress.
 Task<std::vector<Dirent>, Error> readdir(DirHandle &dir, EventLoop &loop = EventLoop::current());
 
 /// Close an opened directory handle.

@@ -214,13 +214,24 @@ static fs::FileStats to_file_stats(const uv_stat_t &s) {
 // DirHandle
 // ============================================================================
 
-fs::DirHandle::DirHandle(DirHandle &&other) noexcept : dir(other.dir) { other.dir = nullptr; }
+fs::DirHandle::DirHandle(DirHandle &&other) noexcept : dir(other.dir) {
+    contract_assert(!other.reading);
+    other.dir = nullptr;
+}
 
 fs::DirHandle &fs::DirHandle::operator=(DirHandle &&other) noexcept {
     if (this == &other) return *this;
     lighter::check(!valid(), "cannot overwrite an open directory handle");
+    contract_assert(!other.reading);
     dir = std::exchange(other.dir, nullptr);
     return *this;
+}
+
+fs::DirHandle::~DirHandle() {
+    // An in-flight readdir() borrows this handle; destroying it first is a
+    // lifetime bug in the caller.
+    contract_assert(!reading);
+    discard_dir_handle(static_cast<uv_dir_t *>(dir));
 }
 
 fs::DirHandle::DirHandle(void *ptr) : dir(ptr) {}
@@ -351,6 +362,10 @@ Task<void, Error> fs::close(i32 fd, EventLoop &loop) {
 Task<void, Error> fs::closedir(fs::DirHandle &dir, EventLoop &loop) {
     if (!dir.valid()) {
         co_await fail(Error::k_invalid_argument);
+    }
+
+    if (dir.reading) {
+        co_await fail(Error::k_connection_already_in_progress);
     }
 
     co_await run_fs<i32>(
@@ -533,6 +548,21 @@ Task<std::vector<fs::Dirent>, Error> fs::readdir(fs::DirHandle &dir, EventLoop &
     if (dir_ptr == nullptr) {
         co_await fail(Error::k_invalid_argument);
     }
+
+    // The entry buffer lives in the shared uv_dir_t, so a second read would
+    // overwrite it while the first is still in flight.
+    if (dir.reading) {
+        co_await fail(Error::k_connection_already_in_progress);
+    }
+
+    // Cleared on every exit, including cancellation (frame destruction).
+    struct ReadingGuard {
+        bool &reading;
+
+        explicit ReadingGuard(bool &flag) noexcept : reading(flag) { reading = true; }
+
+        ~ReadingGuard() { reading = false; }
+    } guard{dir.reading};
 
     constexpr usize entry_count = 64;
     auto entries_storage = std::make_shared<std::vector<uv_dirent_t>>(entry_count);
