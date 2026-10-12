@@ -125,6 +125,8 @@ struct Udp {
 
     usize send_queue_count() const;
 
+    /// Stop receiving; a pending recv() completes with k_operation_aborted.
+    /// The next recv() starts receiving again.
     Error stop_recv();
 
     Task<RecvResult, Error> recv();

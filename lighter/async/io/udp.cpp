@@ -504,6 +504,11 @@ Error Udp::stop_recv() {
 
     uv::udp_recv_stop(self->handle);
     self->receiving = false;
+
+    // With receiving stopped nothing would ever complete a pending recv().
+    if (self->recv.has_waiter()) {
+        self->recv.try_deliver(Result<RecvResult>(outcome_error(Error::k_operation_aborted)));
+    }
     return {};
 }
 
