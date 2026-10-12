@@ -220,6 +220,9 @@ struct StateBase {
                     return R{};
                 }
             } else {
+                // Recorded too, so verify() still fails if the code under test
+                // swallows the exception (or turns it into an Outcome).
+                unexpected_call = true;
                 throw Error(std::string(member) + ": unexpected call (no behavior configured)");
             }
         }
@@ -255,8 +258,11 @@ struct StateBase {
 
     void add_action(action_type action) {
         actions.push_back(std::move(action));
+        ++added_actions;
         if (inferred_count) {
-            expected_calls = actions.size();
+            // Every scripted action ever added, not just the ones still queued:
+            // actions added after earlier calls have already consumed some.
+            expected_calls = added_actions;
         }
     }
 
@@ -265,6 +271,7 @@ struct StateBase {
     std::deque<action_type> actions;
     std::optional<usize> expected_calls;
     usize call_count = 0;
+    usize added_actions = 0;
     bool inferred_count = false;
     bool unexpected_call = false;
 };
