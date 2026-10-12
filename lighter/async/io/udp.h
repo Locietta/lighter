@@ -82,7 +82,8 @@ struct Udp {
 
     static Result<Udp> create(EventLoop &loop = EventLoop::current());
 
-    static Result<Udp> create(CreateOptions options = CreateOptions{}, EventLoop &loop = EventLoop::current());
+    /// `options` has no default so that create() picks the overload above.
+    static Result<Udp> create(CreateOptions options, EventLoop &loop = EventLoop::current());
 
     static Result<Udp> open(i32 fd, EventLoop &loop = EventLoop::current());
 
