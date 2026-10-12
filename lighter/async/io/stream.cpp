@@ -18,6 +18,11 @@ Error ensure_reading(Stream::Self *self, Stream::Self::ReadMode mode, uv_alloc_c
         return Error::k_invalid_argument;
     }
 
+    // Closed by a cancelled write (see StreamWriteAwait::on_cancel).
+    if (uv::is_closing(self->stream)) {
+        return Error::k_bad_file_descriptor;
+    }
+
     if (self->active_read_mode == mode) {
         return {};
     }
@@ -250,13 +255,28 @@ struct StreamWriteAwait : uv::AwaitOp<StreamWriteAwait> {
 
     StreamWriteAwait(Stream::Self *self, std::span<const char> data) : self(self), storage(data.begin(), data.end()) {}
 
+    // uv_write_t is not cancellable via uv_cancel(), and on_write() owns the
+    // completion because `storage` and `req` must outlive the request. If the
+    // kernel already took every byte, on_write() follows on the next loop
+    // iteration. Otherwise the write can wait forever on a peer that stops
+    // reading, so close the stream: libuv then retires the request (normally
+    // with UV_ECANCELED) and on_write() completes this already-CANCELLED op.
+    //
+    // The stream is closed for good afterwards: some of the data may have
+    // been sent, a pending read completes with k_operation_aborted, and later
+    // reads and writes fail with k_bad_file_descriptor. The Stream object
+    // must still be destroyed as usual.
     static void on_cancel(IoOp *op) {
         auto *aw = static_cast<StreamWriteAwait *>(op);
-        if (!aw->self) {
+        auto *self = aw->self;
+        if (!self || uv::stream_write_queue_size(self->stream) == 0) {
             return;
         }
-        // uv_write_t is not cancellable via uv_cancel().
-        // Keep the request in-flight and wait for on_write() to retire it.
+
+        self->close_early();
+        // Closing never fires the read callback; abort the reader after the
+        // close so a read it starts right away fails instead of hanging.
+        self->abort_reader(Error::k_operation_aborted);
     }
 
     static void on_write(uv_write_t *req, i32 status) {
@@ -283,6 +303,12 @@ struct StreamWriteAwait : uv::AwaitOp<StreamWriteAwait> {
     std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_t> waiting,
                                           std::source_location loc = std::source_location::current()) noexcept {
         if (!self) {
+            return waiting;
+        }
+
+        // Closed by a cancelled write (see on_cancel).
+        if (uv::is_closing(self->stream)) {
+            error_code = Error::k_bad_file_descriptor;
             return waiting;
         }
 
@@ -479,6 +505,10 @@ Result<usize> Stream::try_write(std::span<const char> data) {
 
     if (data.size() > static_cast<usize>(std::numeric_limits<u32>::max())) {
         return outcome_error(Error::k_value_too_large_for_defined_data_type);
+    }
+
+    if (uv::is_closing(self->stream)) {
+        return outcome_error(Error::k_bad_file_descriptor);
     }
 
     uv_buf_t buf = uv::buf_init(const_cast<char *>(data.data()), static_cast<u32>(data.size()));

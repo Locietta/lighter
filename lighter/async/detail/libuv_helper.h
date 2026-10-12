@@ -296,6 +296,13 @@ ALWAYS_INLINE Result<usize> try_write(S &stream, std::span<const uv_buf_t> bufs)
     return static_cast<usize>(rc);
 }
 
+/// Bytes queued by uv_write() that the kernel has not accepted yet. Zero
+/// means every pending write only waits for its callback.
+template <stream_like S>
+ALWAYS_INLINE usize stream_write_queue_size(const S &stream) noexcept {
+    return ::uv_stream_get_write_queue_size(as_stream(stream));
+}
+
 template <stream_like S>
 ALWAYS_INLINE Error stream_set_blocking(S &stream, bool enabled) noexcept {
     return status_to_error(::uv_stream_set_blocking(as_stream(stream), enabled ? 1 : 0));
@@ -737,6 +744,29 @@ public:
         return self;
     }
 
+    /// Closes the handle while the owner keeps the wrapper, e.g. to abort a
+    /// write libuv cannot cancel. Every later libuv call on the handle fails;
+    /// destroy() still runs as usual and frees the wrapper once the close has
+    /// completed. Does nothing if the handle is already closing.
+    void close_early() noexcept {
+        auto *self = static_cast<Derived *>(this);
+        auto &h = self->handle;
+        if (!self->initialized() || uv::is_closing(h)) {
+            return;
+        }
+
+        early_close = EarlyClose::CLOSING;
+        h.data = self;
+        uv::close(h, [](uv_handle_t *handle) {
+            auto *self = static_cast<Derived *>(handle->data);
+            if (self->early_close == EarlyClose::ORPHANED) {
+                delete self;
+                return;
+            }
+            self->early_close = EarlyClose::CLOSED;
+        });
+    }
+
     /// Releases the wrapper around a libuv handle.
     ///
     /// Normal path: the owner is destroyed while the Event loop is still alive,
@@ -752,8 +782,9 @@ public:
     /// If teardown has started that close but its callback has not run yet
     /// (e.g. the owner is destroyed from another handle's close callback in the
     /// same teardown pass), the wrapper is handed to that callback instead.
-    /// The handle is only ever closed by this function or the teardown, so a
-    /// closing handle that is not recorded is that pending teardown close.
+    /// The handle is only ever closed by this function, close_early() or the
+    /// teardown, so a closing handle that is neither early-closed nor recorded
+    /// is that pending teardown close.
     static void destroy(Derived *self) noexcept {
         if (!self) {
             return;
@@ -766,6 +797,17 @@ public:
 
         auto &h = self->handle;
         h.data = self;
+        if (self->early_close != EarlyClose::NONE) {
+            // close_early() already closed the handle (its waiters were
+            // aborted then); free now or let its close callback do it.
+            if (self->early_close == EarlyClose::CLOSED) {
+                delete self;
+            } else {
+                self->early_close = EarlyClose::ORPHANED;
+            }
+            return;
+        }
+
         if (uv::is_closing(h)) {
             if (uv::LoopCloseFallback::take(uv::as_handle(h))) {
                 delete self;
@@ -792,6 +834,19 @@ public:
             delete self;
         });
     }
+
+private:
+    enum class EarlyClose : u8 {
+        NONE,
+        /// close_early() issued uv_close(); the owner still holds the wrapper.
+        CLOSING,
+        /// The close completed; destroy() frees the wrapper directly.
+        CLOSED,
+        /// destroy() ran while closing; the close callback frees the wrapper.
+        ORPHANED,
+    };
+
+    EarlyClose early_close = EarlyClose::NONE;
 };
 
 template <typename Derived, typename Handle>

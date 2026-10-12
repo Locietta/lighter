@@ -64,6 +64,12 @@ struct Stream {
     void stop();
 
     /// Write data to the Stream; only one writer at a time.
+    ///
+    /// libuv cannot cancel a queued write, so cancelling a write whose data
+    /// the kernel has not fully accepted closes the Stream to keep the
+    /// cancellation bounded. Some of the data may have been sent; a pending
+    /// read completes with k_operation_aborted, and later reads and writes
+    /// fail with k_bad_file_descriptor. The Stream must still be destroyed.
     Task<void, Error> write(std::span<const char> data);
 
     /// Try a non-blocking write; returns bytes written or Error.
