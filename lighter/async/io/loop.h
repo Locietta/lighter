@@ -156,6 +156,9 @@ struct EventLoop {
     /// Schedules a Task for execution on this Event loop.
     /// If the Task is passed by rvalue (temporary), the loop takes ownership
     /// (sets root=true). The Task will be destroyed after it completes.
+    /// If it is passed by lvalue, the caller keeps ownership and must keep the
+    /// Task alive until it has completed (typically until run() returns);
+    /// destroying it earlier destroys a running coroutine frame.
     template <typename TaskT>
     void schedule(TaskT &&task, std::source_location location = std::source_location::current())
         pre(self != nullptr && task.h != nullptr && task.h.promise().state == AsyncNode::PENDING) {
