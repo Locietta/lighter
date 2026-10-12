@@ -16,7 +16,7 @@ end
 
 target("lighter")
     set_kind("static")
-    add_files("async/**/*.cpp", "encoding/*.cpp", "http/*.cpp", "lexer/*.cpp", "lexer/**/*.cpp", "utils/*.cpp")
+    add_files("async/**/*.cpp", "encoding/*.cpp", "http/*.cpp", "utils/*.cpp")
     add_packages("llhttp")
     -- `xmake install` (and the xmake package) lays headers out as include/lighter/...
     add_headerfiles("(**.h)|tests/**.h", "(**.hpp)", {prefixdir = "lighter"})

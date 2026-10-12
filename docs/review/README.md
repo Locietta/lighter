@@ -3,6 +3,7 @@
 Findings from the 2026-10-12 review of lighter 0.3.1 (commit `584438d`). These
 docs are a scratchpad to revisit after the lexer split and the test cleanup;
 delete each file once its issues are resolved or moved to an issue tracker.
+The lexer findings (`LX-*`) moved with the lexer to lilac's `docs/review/lexer.md`.
 
 | File                     | Area                                                                  |
 | ------------------------ | --------------------------------------------------------------------- |
@@ -10,7 +11,6 @@ delete each file once its issues are resolved or moved to an issue tracker.
 | [io.md](io.md)           | libuv I/O layer: stream, udp, fs, process, watcher, terminal, control |
 | [http.md](http.md)       | curl client, streaming/SSE, HTTP/1.1 server, oneshot                  |
 | [utils.md](utils.md)     | containers, encoding, codecs, mock, panic                             |
-| [lexer.md](lexer.md)     | syntax-highlighting lexers (moves with the lexer to its new repo)     |
 | [tests.md](tests.md)     | coverage gaps, input for the test audit                               |
 
 ## Conventions

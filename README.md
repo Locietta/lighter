@@ -15,7 +15,9 @@ Besides the async runtime, lighter also provides other utilities that can be use
 - serialization for JSON, JSONL with [glaze](https://github.com/stephenberry/glaze)
 - UTF-8 and iconv utilities
 - small containers and helpers (`small_vector`, `flat_map`, `check` / `panic`)
-- Syntax highlighting lexers (ported from lexilla lexers, rewritten with C++ reflection)
+
+The syntax-highlighting lexers that used to live here (until 0.3.x) are now a
+separate library, [lilac](https://github.com/Locietta/lilac).
 
 ## Using it from another project
 
@@ -29,7 +31,7 @@ Use the package just like any other xmake package after adding the custom reposi
 add_repositories("Locietta git@github.com:Locietta/xmake-repo.git")
 -- (Or add the xmake repo as git submodule and then add it from the local path as what we do in this repo.)
 
-add_requires("lighter 0.2.0")
+add_requires("lighter 0.4.0")
 
 target("app")
     add_packages("lighter")

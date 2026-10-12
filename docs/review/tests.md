@@ -34,14 +34,13 @@ Input for the test audit (lighter + liminal). Status as of `584438d`.
   `to_utf8`, no UTF-16 errors (UT-6), no stateful targets (UT-7).
 - **FlatMap**: no throwing types.
 - **test-mock**: no swallowed unexpected call (UT-8), no action after a call (UT-9).
-- **Lexers**: one smoke test per language; see lexer.md for the gaps.
 
 ## Audit questions (to answer per test, lighter and liminal)
 
 1. Does it fail for a plausible real bug, or only check a value that cannot
    change (narrow, tautological, mirrors the implementation)? Remove or merge
    those.
-2. Does it belong in lighter, the lexer library, or liminal? Infra behaviour
+2. Does it belong in lighter, lilac, or liminal? Infra behaviour
    tested only from liminal should move here; liminal-specific integration
    should stay there.
 3. Which documented feature intentions (doc comments promising behaviour) have
