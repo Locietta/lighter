@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <uv.h>
@@ -679,15 +680,37 @@ inline Result<ResolvedAddr> resolve_addr(std::string_view host, i32 port) {
 /// thread may create and tear down multiple loops sequentially.
 struct LoopCloseFallback {
     using registry_type = std::unordered_set<const uv_handle_t *>;
+    using deleter = void (*)(const uv_handle_t *handle) noexcept;
+    using orphan_registry_type = std::unordered_map<const uv_handle_t *, deleter>;
 
-    static void mark(const uv_handle_t *handle) { handles().insert(handle); }
+    /// Close callback of the teardown force-close. Frees a wrapper whose owner
+    /// was already destroyed while the close was in flight; otherwise records
+    /// the handle for a later take().
+    static void mark(const uv_handle_t *handle) {
+        if (auto it = orphans().find(handle); it != orphans().end()) {
+            auto release = it->second;
+            orphans().erase(it);
+            release(handle);
+            return;
+        }
+        handles().insert(handle);
+    }
 
     static bool take(const uv_handle_t *handle) { return handles().erase(handle) != 0; }
+
+    /// Hands a wrapper whose handle is still closing to mark(), which frees it
+    /// once libuv no longer uses the handle.
+    static void adopt(const uv_handle_t *handle, deleter release) { orphans().insert_or_assign(handle, release); }
 
 private:
     static registry_type &handles() {
         static thread_local registry_type late_closed_handles;
         return late_closed_handles;
+    }
+
+    static orphan_registry_type &orphans() {
+        static thread_local orphan_registry_type orphaned_handles;
+        return orphaned_handles;
     }
 };
 
@@ -724,9 +747,11 @@ public:
     /// recorded it in uv::LoopCloseFallback. In that case the wrapper may be
     /// destroyed later and we reclaim it directly here.
     ///
-    /// Any other observed closing state is unexpected and indicates a lifetime
-    /// bug: the handle is closing, but not through the recognized loop-teardown
-    /// fallback.
+    /// If teardown has started that close but its callback has not run yet
+    /// (e.g. the owner is destroyed from another handle's close callback in the
+    /// same teardown pass), the wrapper is handed to that callback instead.
+    /// The handle is only ever closed by this function or the teardown, so a
+    /// closing handle that is not recorded is that pending teardown close.
     static void destroy(Derived *self) noexcept {
         if (!self) {
             return;
@@ -740,15 +765,14 @@ public:
         auto &h = self->handle;
         h.data = self;
         if (uv::is_closing(h)) {
-            const bool closed_by_loop_cleanup = uv::LoopCloseFallback::take(uv::as_handle(h));
-            if (!closed_by_loop_cleanup) {
-                // This is a lifetime bug: the handle is closing, but not through
-                // the recognized loop-teardown fallback.
-                contract_assert(false);
+            if (uv::LoopCloseFallback::take(uv::as_handle(h))) {
+                delete self;
                 return;
             }
 
-            delete self;
+            // Neither leak the wrapper nor free memory libuv still uses.
+            uv::LoopCloseFallback::adopt(uv::as_handle(h),
+                                         [](const uv_handle_t *handle) noexcept { delete static_cast<Derived *>(handle->data); });
             return;
         }
 
