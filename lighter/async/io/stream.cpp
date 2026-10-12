@@ -75,9 +75,10 @@ struct StreamReadAwait : uv::AwaitOp<StreamReadAwait> {
         if (auto err = uv::status_to_error(nread)) {
             uv::read_stop(*stream);
             s->active_read_mode = Stream::Self::ReadMode::NONE;
+            // A UV_ECANCELED here is never our own cancel (that disarms the
+            // reader synchronously), so it is reported as an Error.
             if (s->reader.has_waiter()) {
                 auto *reader = s->reader.waiter;
-                s->reader.mark_cancelled_if(nread);
                 s->reader.disarm();
                 s->error_code = err;
                 reader->complete();
@@ -178,8 +179,8 @@ struct StreamReadSomeAwait : uv::AwaitOp<StreamReadSomeAwait> {
         if (nread == UV_EOF) {
             aw->out = usize{0};
         } else if (auto err = uv::status_to_error(nread)) {
+            // Includes UV_ECANCELED, which our own cancel never produces.
             aw->out = outcome_error(err);
-            aw->mark_cancelled_if(nread);
         } else if (nread > 0) {
             aw->out = static_cast<usize>(nread);
         } else {
@@ -249,8 +250,9 @@ struct StreamWriteAwait : uv::AwaitOp<StreamWriteAwait> {
         contract_assert(aw != nullptr);
         contract_assert(aw->self != nullptr);
 
-        aw->mark_cancelled_if(status);
-
+        // UV_ECANCELED from a handle closed under the write is an Error. A
+        // cancelled write already is CANCELLED: AsyncNode::cancel() marks the
+        // op before invoking on_cancel.
         if (auto err = uv::status_to_error(status)) {
             aw->error_code = err;
         }

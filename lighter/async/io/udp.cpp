@@ -138,8 +138,9 @@ struct UdpRecvAwait : uv::AwaitOp<UdpRecvAwait> {
         auto *u = static_cast<Udp::Self *>(handle->data);
         contract_assert(u != nullptr);
 
+        // A UV_ECANCELED here is never our own cancel (that disarms the
+        // waiter synchronously), so it is reported as an Error.
         if (auto err = uv::status_to_error(nread)) {
-            u->recv.mark_cancelled_if(nread);
             u->recv.deliver(err);
             return;
         }
@@ -235,8 +236,9 @@ struct UdpSendAwait : uv::AwaitOp<UdpSendAwait> {
 
         u->send_inflight = false;
 
-        u->send.mark_cancelled_if(status);
-
+        // UV_ECANCELED means the handle was closed under the send, which is
+        // an Error. A cancelled send already is CANCELLED: AsyncNode::cancel()
+        // marks the op before invoking on_cancel.
         auto ec = uv::status_to_error(status);
 
         u->send.deliver(std::move(ec));

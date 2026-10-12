@@ -29,16 +29,6 @@ struct SingleWaiter {
     void arm(IoOp &op) noexcept { waiter = &op; }
 
     void disarm() noexcept { waiter = nullptr; }
-
-    template <typename StatusT>
-    bool mark_cancelled_if(StatusT status) noexcept {
-        if (waiter == nullptr || !is_cancelled_status(status)) {
-            return false;
-        }
-
-        waiter->state = AsyncNode::CANCELLED;
-        return true;
-    }
 };
 
 template <typename ResultT>
