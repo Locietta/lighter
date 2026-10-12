@@ -40,7 +40,9 @@ struct Stream {
     /// Read available data into a std::string; waits for at least one read if empty.
     ///
     /// The read operations share a single reader: while one of them waits, any
-    /// other read fails with k_connection_already_in_progress.
+    /// other read fails with k_connection_already_in_progress. EOF and read
+    /// errors are sticky: once seen, every read reports them after the
+    /// buffered data is drained, even if no read was waiting at the time.
     Task<std::string, Error> read();
 
     /// Read up to dst.size() bytes into dst; returns bytes read, 0 on EOF, or an Error.

@@ -197,7 +197,11 @@ struct Stream::Self : uv::handle<Stream::Self, uv_stream_t>, StreamHandle {
     uv::SingleWaiter reader;
     uv::SingleWaiter writer;
     RingBuffer buffer{};
+    /// Result of the current buffered read await.
     Error error_code{};
+    /// First terminal read status (EOF or an error), latched even when no
+    /// reader was waiting so later reads report it instead of restarting.
+    Error read_error{};
     ReadMode active_read_mode = ReadMode::NONE;
 };
 

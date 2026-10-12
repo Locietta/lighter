@@ -35,6 +35,16 @@ Error ensure_reading(Stream::Self *self, Stream::Self::ReadMode mode, uv_alloc_c
     return {};
 }
 
+/// Latches a terminal read status even when no reader is waiting, so a reset
+/// that arrives between reads is not later mistaken for EOF. UV_ENOBUFS only
+/// means on_alloc paused reading (full buffer, or no direct reader) and is
+/// not a stream error.
+void latch_read_error(Stream::Self &self, isize nread) noexcept {
+    if (nread < 0 && nread != UV_ENOBUFS && !self.read_error) {
+        self.read_error = uv::status_to_error(nread);
+    }
+}
+
 struct StreamReadAwait : uv::AwaitOp<StreamReadAwait> {
     using await_base = uv::AwaitOp<StreamReadAwait>;
     // Stream self used to register reader waiter and store Error status.
@@ -75,6 +85,7 @@ struct StreamReadAwait : uv::AwaitOp<StreamReadAwait> {
         if (auto err = uv::status_to_error(nread)) {
             uv::read_stop(*stream);
             s->active_read_mode = Stream::Self::ReadMode::NONE;
+            latch_read_error(*s, nread);
             // A UV_ECANCELED here is never our own cancel (that disarms the
             // reader synchronously), so it is reported as an Error.
             if (s->reader.has_waiter()) {
@@ -168,6 +179,8 @@ struct StreamReadSomeAwait : uv::AwaitOp<StreamReadSomeAwait> {
     static void on_read(uv_stream_t *stream, isize nread, const uv_buf_t *) {
         auto s = static_cast<Stream::Self *>(stream->data);
         contract_assert(s != nullptr);
+
+        latch_read_error(*s, nread);
 
         // stop() may have already disarmed the waiter. If a queued on_read
         // fires after stop(), there is nothing left to complete - just bail out.
@@ -315,6 +328,9 @@ Task<std::string, Error> Stream::read() {
     }
 
     if (self->buffer.readable_bytes() == 0) {
+        if (self->read_error) {
+            co_await fail(self->read_error);
+        }
         // Single reader: a second waiter would replace the first, which
         // then never resumes.
         if (self->reader.has_waiter()) {
@@ -347,6 +363,13 @@ Task<usize, Error> Stream::read_some(std::span<char> dst) {
         co_return to_read;
     }
 
+    if (self->read_error == Error::k_end_of_file) {
+        co_return usize{0};
+    }
+    if (self->read_error) {
+        co_await fail(self->read_error);
+    }
+
     if (self->reader.has_waiter()) {
         co_await fail(Error::k_connection_already_in_progress);
     }
@@ -361,6 +384,9 @@ Task<Stream::Chunk, Error> Stream::read_chunk() {
     }
 
     if (self->buffer.readable_bytes() == 0) {
+        if (self->read_error) {
+            co_await fail(self->read_error);
+        }
         if (self->reader.has_waiter()) {
             co_await fail(Error::k_connection_already_in_progress);
         }
