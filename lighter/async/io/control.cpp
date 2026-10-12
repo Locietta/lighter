@@ -82,8 +82,14 @@ std::mutex g_registry_mutex;
 static_assert(std::atomic<ControlEventSource::Self *>::is_always_lock_free);
 static_assert(std::atomic<u32>::is_always_lock_free);
 
+// unpublish() and the native handlers form a Dekker pair: unpublish stores the
+// empty slot and then loads the handler count, a handler bumps the count and
+// then loads the slot. Release/acquire does not order a store before a later
+// load (StoreLoad), so both could miss each other and a handler could use a
+// deleted Self or write to a closed fd. All four accesses are seq_cst; then
+// at least one side observes the other.
 void wait_for_handlers() noexcept {
-    while (g_active_handlers.load(std::memory_order_acquire) != 0) {
+    while (g_active_handlers.load(std::memory_order_seq_cst) != 0) {
         std::this_thread::yield();
     }
 }
@@ -102,7 +108,7 @@ void unpublish(ControlEventSource::Self &self) noexcept {
     if (self.registry_slot < 0) {
         return;
     }
-    g_sources[static_cast<usize>(self.registry_slot)].store(nullptr, std::memory_order_release);
+    g_sources[static_cast<usize>(self.registry_slot)].store(nullptr, std::memory_order_seq_cst);
     self.registry_slot = -1;
     wait_for_handlers();
 }
@@ -123,12 +129,13 @@ std::optional<ControlEventKind> from_windows_control(DWORD value) noexcept {
 }
 
 BOOL WINAPI control_handler(DWORD value) {
-    g_active_handlers.fetch_add(1, std::memory_order_acquire);
+    // seq_cst: see wait_for_handlers().
+    g_active_handlers.fetch_add(1, std::memory_order_seq_cst);
 
     bool handled = false;
     if (auto kind = from_windows_control(value)) {
         for (auto &slot : g_sources) {
-            auto *source = slot.load(std::memory_order_acquire);
+            auto *source = slot.load(std::memory_order_seq_cst);
             if (!source || !source->watches(*kind)) {
                 continue;
             }
@@ -226,12 +233,13 @@ std::optional<ControlEventKind> from_posix_signal(i32 value) noexcept {
 
 extern "C" void posix_control_handler(i32 value) {
     const i32 saved_errno = errno;
-    g_active_handlers.fetch_add(1, std::memory_order_acquire);
+    // seq_cst: see wait_for_handlers().
+    g_active_handlers.fetch_add(1, std::memory_order_seq_cst);
 
     if (auto kind = from_posix_signal(value)) {
         const auto byte = static_cast<u8>(*kind);
         for (auto &slot : g_sources) {
-            auto *source = slot.load(std::memory_order_acquire);
+            auto *source = slot.load(std::memory_order_seq_cst);
             if (!source || !source->watches(*kind)) {
                 continue;
             }

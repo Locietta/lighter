@@ -507,8 +507,12 @@ static_assert(std::atomic<u32>::is_always_lock_free);
 
 extern "C" void terminal_winch_handler(i32) {
     const i32 saved_errno = errno;
-    g_winch_handlers.fetch_add(1, std::memory_order_acquire);
-    if (auto *owner = g_terminal_owner.load(std::memory_order_acquire)) {
+    // seq_cst on both sides (here and in shutdown()): this increment-then-load
+    // races shutdown's store-then-load, and only seq_cst orders a store before
+    // a later load. Otherwise both could miss each other and the handler would
+    // write to a closed fd of a deleted session.
+    g_winch_handlers.fetch_add(1, std::memory_order_seq_cst);
+    if (auto *owner = g_terminal_owner.load(std::memory_order_seq_cst)) {
         const u8 byte = 1;
         [[maybe_unused]] const auto written = ::write(owner->resize_write, &byte, sizeof(byte));
     }
@@ -953,7 +957,8 @@ void TerminalSession::Self::shutdown() noexcept {
     restore_terminal_state();
 
     if (owns_process_terminal) {
-        g_terminal_owner.store(nullptr, std::memory_order_release);
+        // seq_cst: pairs with terminal_winch_handler (StoreLoad).
+        g_terminal_owner.store(nullptr, std::memory_order_seq_cst);
         owns_process_terminal = false;
     }
 
@@ -973,7 +978,7 @@ void TerminalSession::Self::shutdown() noexcept {
         owns_output = false;
     }
 #else
-    while (g_winch_handlers.load(std::memory_order_acquire) != 0) {
+    while (g_winch_handlers.load(std::memory_order_seq_cst) != 0) {
         std::this_thread::yield();
     }
     if (winch_installed) {
