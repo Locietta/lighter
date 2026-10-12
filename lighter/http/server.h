@@ -53,8 +53,12 @@ struct ServerOptions {
     usize max_connections = 64;
     /// How long a kept-alive connection may wait for its next request.
     std::chrono::milliseconds idle_timeout{60'000};
-    /// How long a request may take to arrive once its first byte has.
+    /// How long a request may take to arrive once its first byte has: one
+    /// deadline for the whole request (body included), not a per-read limit.
     std::chrono::milliseconds read_timeout{30'000};
+    /// How long sending one response may take. A client that stops reading is
+    /// disconnected once it runs out, so it cannot hold a slot or stall stop().
+    std::chrono::milliseconds write_timeout{30'000};
     bool tcp_nodelay = true;
 };
 

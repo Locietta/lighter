@@ -44,6 +44,9 @@ struct ServerParse {
     usize header_bytes = 0;
     usize max_header_bytes = 0;
     usize max_body_bytes = 0;
+    std::chrono::milliseconds read_timeout{};
+    /// When the request being parsed has to be complete; set by its first byte.
+    std::chrono::steady_clock::time_point deadline{};
     Stop stop = Stop::NONE;
     /// A byte of the next request has arrived.
     bool started = false;
@@ -75,6 +78,7 @@ int on_message_begin(llhttp_t *parser) {
     parse.header_bytes = 0;
     parse.stop = Parse::Stop::NONE;
     parse.started = true;
+    parse.deadline = std::chrono::steady_clock::now() + parse.read_timeout;
     return 0;
 }
 
@@ -179,6 +183,7 @@ struct detail::ServerConnection {
         parser.data = &parse;
         parse.max_header_bytes = server.options.max_header_bytes;
         parse.max_body_bytes = server.options.max_body_bytes;
+        parse.read_timeout = server.options.read_timeout;
         server.connections.push_back(this);
     }
 
@@ -212,7 +217,11 @@ Task<Next> read_next(Connection &connection) {
         }
 
         connection.idle = between;
-        auto chunk = co_await with_timeout(connection.stream.read_chunk(), between ? options.idle_timeout : options.read_timeout);
+        // Between requests each wait gets the idle budget; within one, every
+        // read gets what is left of the deadline its first byte set.
+        const auto budget = between ? std::chrono::steady_clock::duration(options.idle_timeout) :
+                                      connection.parse.deadline - std::chrono::steady_clock::now();
+        auto chunk = co_await with_timeout(connection.stream.read_chunk(), budget);
         connection.idle = false;
         if (chunk.is_cancelled()) {
             co_await cancel();
@@ -264,8 +273,14 @@ std::string serialize(const ServerResponse &response, bool keep_alive, bool head
     return out;
 }
 
+/// False when the connection has to close: the write failed, or the client
+/// did not take the bytes within write_timeout (the write is then cancelled).
 Task<bool> send(Connection &connection, std::string bytes) {
-    auto written = co_await connection.stream.write(std::span(bytes.data(), bytes.size()));
+    auto written =
+        co_await with_timeout(connection.stream.write(std::span(bytes.data(), bytes.size())), connection.server->options.write_timeout);
+    if (written.is_cancelled()) {
+        co_await cancel();
+    }
     co_return written.has_value();
 }
 
