@@ -350,7 +350,12 @@ void TerminalInputDecoder::parse(bool flush_escape, std::function_ref<void(Termi
             }
             ++end;
         }
-        const auto complete = encoding::utf8::complete_prefix_len(std::string_view(input).substr(0, end));
+        // Only a run that reaches the end of the buffered input can still be
+        // completed by a later feed(). A run cut short by a control byte or
+        // ESC is final: emit all of it, so a truncated sequence such as
+        // "\xC3\r" becomes U+FFFD instead of blocking the input forever.
+        const auto run = std::string_view(input).substr(0, end);
+        const auto complete = end < input.size() ? end : encoding::utf8::complete_prefix_len(run);
         if (complete == 0) {
             return;
         }
