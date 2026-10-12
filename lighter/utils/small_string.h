@@ -61,6 +61,18 @@ public:
 
     /// Append from a list of string_views.
     constexpr void append(std::initializer_list<std::string_view> refs) {
+        // resize_for_overwrite may reallocate; concatenate views of our own
+        // storage into a separate string first.
+        const auto aliases = [this](std::string_view ref) {
+            const std::less<const char *> less;
+            return !ref.empty() && !less(ref.data(), this->data()) && less(ref.data(), this->data() + this->size());
+        };
+        if (std::ranges::any_of(refs, aliases)) {
+            const SmallString joined(refs);
+            base::append(std::string_view(joined));
+            return;
+        }
+
         usize current_size = this->size();
         usize size_needed = current_size;
         for (const std::string_view &ref : refs) {

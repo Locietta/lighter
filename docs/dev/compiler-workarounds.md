@@ -15,13 +15,13 @@ To recheck, restore `decltype(auto)` on the three accessors and compile
 
 ## HybridVector counted-range contracts
 
-`lighter/utils/small_vector.h` checks `first != nullptr` inside both
-`counted_range` overloads with `contract_assert`. Expressing this as a
+`lighter/utils/small_vector.h` checks `first != nullptr || count == 0` inside
+both `counted_range` overloads with `contract_assert`. Expressing this as a
 precondition causes an ICE in `fold_convert_loc` at `fold-const.cc:2800`, during
 the GIMPLE `dom` pass, after inlining into non-trivial element insertion paths.
 
-To recheck, replace each body assertion with `pre(first != nullptr)` and compile
-`lighter/tests/test-relocation/main.cpp`.
+To recheck, replace each body assertion with `pre(first != nullptr || count == 0)`
+and compile `lighter/tests/test-relocation/main.cpp`.
 
 Both failures reproduce on Windows and Linux at `-O2` and `-O3` with
 `-fcontract-evaluation-semantic=enforce`. Recheck with contracts enforced;

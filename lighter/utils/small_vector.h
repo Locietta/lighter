@@ -172,8 +172,11 @@ protected:
     // Same semantics either way; revert to pre() once the toolchain is fixed.
     // Rechecked with enforced contracts on Windows and Linux; see
     // docs/dev/compiler-workarounds.md.
+    //
+    // An empty range may start at nullptr: during constant evaluation the
+    // vector has no inline storage, so begin() is null until it allocates.
     [[nodiscard]] constexpr static auto counted_range(pointer first, size_type count) noexcept {
-        contract_assert(first != nullptr);
+        contract_assert(first != nullptr || count == 0);
         if (count == 0) {
             return pointer_range(first, first);
         }
@@ -183,7 +186,7 @@ protected:
 
     [[nodiscard]]
     constexpr static auto counted_range(const_pointer first, size_type count) noexcept {
-        contract_assert(first != nullptr);
+        contract_assert(first != nullptr || count == 0);
         if (count == 0) {
             return pointer_range(first, first);
         }
@@ -595,8 +598,12 @@ private:
         }
 
         auto *middle = mem::uninitialized_fill(counted_range(old_end, count - elems_after), value);
-        middle = mem::uninitialized_copy(mem::move_range(insert_pos, old_end), middle);
-        this->set_size(size() + count);
+        // Own the new copies before moving the tail, which may throw: the
+        // vector is then left valid with extra trailing copies (basic
+        // guarantee) instead of leaking them.
+        this->set_size(size() + (count - elems_after));
+        mem::uninitialized_copy(mem::move_range(insert_pos, old_end), middle);
+        this->set_size(size() + elems_after);
         std::ranges::fill_n(insert_pos, elems_after, value);
         return insert_pos;
     }
@@ -661,8 +668,11 @@ private:
         auto first_part_end = std::ranges::next(std::ranges::begin(range), elems_after);
         auto tail_range = std::ranges::subrange(first_part_end, std::ranges::end(range));
         auto *middle = mem::uninitialized_copy(tail_range, old_end);
-        middle = mem::uninitialized_copy(mem::move_range(insert_pos, old_end), middle);
-        this->set_size(size() + count);
+        // Own the copied tail before moving the old elements, which may throw
+        // (see insert_fill_inplace).
+        this->set_size(size() + static_cast<size_type>(middle - old_end));
+        mem::uninitialized_copy(mem::move_range(insert_pos, old_end), middle);
+        this->set_size(size() + elems_after);
         std::ranges::copy(std::ranges::subrange(std::ranges::begin(range), first_part_end), insert_pos);
         return insert_pos;
     }
@@ -720,12 +730,15 @@ protected:
     }
 
     constexpr void move_from_other(HybridVector &&other) {
-        if (other.empty()) {
+        // Steal before the emptiness check: an empty source can still own a
+        // heap buffer (e.g. after clear()), and callers reset it to inline
+        // storage afterwards, which would leak that buffer.
+        if (should_steal_allocation_from(other)) {
+            steal_allocation_from(other);
             return;
         }
 
-        if (should_steal_allocation_from(other)) {
-            steal_allocation_from(other);
+        if (other.empty()) {
             return;
         }
 
@@ -986,9 +999,15 @@ public:
     template <detail::small_vector_compatible_range<value_type> Range>
     constexpr void append(Range &&range) {
         if constexpr (std::ranges::forward_range<Range>) {
-            assert_safe_to_add_range(range);
             const auto count = mem::range_length(range);
             if (count == 0) {
+                return;
+            }
+
+            // Growing would free the storage the range reads from (v.append(v),
+            // s += s); copy it out first, as insert() does.
+            if (range_references_storage(range)) {
+                insert_aliased_forward_range(end(), std::forward<Range>(range), count);
                 return;
             }
 
@@ -1222,6 +1241,11 @@ public:
 
     constexpr SmallVector(const base_type &other) : SmallVector() { this->append(std::ranges::subrange(other.begin(), other.end())); }
 
+    /// Moving from the type-erased base cannot restore the source's inline
+    /// capacity (HybridVector does not know it): if its heap buffer is stolen,
+    /// the source is left empty with capacity 0 and grows on the heap from
+    /// then on. It stays valid and frees correctly. Move from the concrete
+    /// SmallVector to keep the inline buffer usable.
     constexpr SmallVector(base_type &&other) : SmallVector() { this->move_from_other(std::move(other)); }
 
     constexpr SmallVector(const SmallVector &other) : SmallVector(static_cast<const base_type &>(other)) {}
@@ -1246,6 +1270,9 @@ public:
         return *this;
     }
 
+    /// See SmallVector(base_type &&) for the moved-from source's capacity.
+    /// Moving an inline source into a smaller buffer allocates; allocation
+    /// failure terminates under this noexcept, consistent with OOM being fatal.
     constexpr SmallVector &operator=(base_type &&other) noexcept(std::is_nothrow_move_constructible_v<value_type>) {
         if (static_cast<const base_type *>(this) == std::addressof(other)) {
             return *this;
