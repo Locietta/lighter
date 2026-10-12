@@ -178,11 +178,25 @@ struct Stream::Self : uv::handle<Stream::Self, uv_stream_t>, StreamHandle {
     /// reader was waiting so later reads report it instead of restarting.
     Error read_error{};
     ReadMode active_read_mode = ReadMode::NONE;
+
+    /// Stops reading and completes a pending read with `err`.
+    void abort_reader(Error err) noexcept;
+
+    /// Called by destroy(): aborts a pending read. A pending write is retired
+    /// by libuv with UV_ECANCELED when the handle closes.
+    void abort_waiters() noexcept { abort_reader(Error::k_operation_aborted); }
 };
 
 template <typename Stream>
 struct Acceptor<Stream>::Self : uv::handle<Acceptor<Stream>::Self, uv_stream_t>, StreamHandle, uv::QueuedDelivery<Result<Stream>> {
     i32 pipe_ipc = 0;
+
+    /// Called by destroy(): completes a pending accept().
+    void abort_waiters() noexcept {
+        if (this->has_waiter()) {
+            this->try_deliver(Result<Stream>(outcome_error(Error::k_operation_aborted)));
+        }
+    }
 };
 
 } // namespace lighter

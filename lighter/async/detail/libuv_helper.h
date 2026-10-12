@@ -741,7 +741,9 @@ public:
     ///
     /// Normal path: the owner is destroyed while the Event loop is still alive,
     /// so we issue uv_close() with a delete callback and let libuv release the
-    /// wrapper once the close finishes on the loop.
+    /// wrapper once the close finishes on the loop. A Derived that can have
+    /// tasks waiting on it provides `abort_waiters()`, which must complete
+    /// them with k_operation_aborted; it runs before the close.
     ///
     /// Fallback path: EventLoop teardown already force-closed the handle and
     /// recorded it in uv::LoopCloseFallback. In that case the wrapper may be
@@ -774,6 +776,15 @@ public:
             uv::LoopCloseFallback::adopt(uv::as_handle(h),
                                          [](const uv_handle_t *handle) noexcept { delete static_cast<Derived *>(handle->data); });
             return;
+        }
+
+        // uv_close() never fires a pending read/accept/recv/exit/tick
+        // callback, so a task waiting on one would hang, and cancelling it
+        // later would touch this freed wrapper. Complete such waiters first.
+        // In-flight write/send requests need nothing here: libuv retires them
+        // with UV_ECANCELED before the close callback runs.
+        if constexpr (requires(Derived &d) { d.abort_waiters(); }) {
+            self->abort_waiters();
         }
 
         uv::close(h, [](uv_handle_t *handle) {

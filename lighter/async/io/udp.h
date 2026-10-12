@@ -130,6 +130,9 @@ struct Udp {
     /// The next recv() starts receiving again.
     Error stop_recv();
 
+    /// Destroying the Udp completes a pending recv() with
+    /// k_operation_aborted; a pending send() completes when libuv retires it
+    /// during the close, normally with UV_ECANCELED.
     Task<RecvResult, Error> recv();
 
 private:

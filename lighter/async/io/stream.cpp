@@ -409,6 +409,35 @@ void Stream::consume(usize n) {
     self->buffer.advance_read(n);
 }
 
+void Stream::Self::abort_reader(Error err) noexcept {
+    // Capture the mode before resetting - we need it to pick the right
+    // Error-delivery path for the pending Awaiter below.
+    auto mode = active_read_mode;
+
+    if (mode != ReadMode::NONE) {
+        uv::read_stop(stream);
+        active_read_mode = ReadMode::NONE;
+    }
+
+    if (reader.has_waiter()) {
+        auto *waiter = reader.waiter;
+        reader.disarm();
+
+        // For buffered reads (StreamReadAwait), await_resume() returns
+        // error_code, so setting it here is sufficient.
+        error_code = err;
+
+        // For direct reads (StreamReadSomeAwait), await_resume() returns
+        // aw->out instead of error_code. Propagate the Error there too so the
+        // caller observes it rather than a default Error.
+        if (mode == ReadMode::DIRECT) {
+            static_cast<StreamReadSomeAwait *>(waiter)->out = outcome_error(err);
+        }
+
+        waiter->complete();
+    }
+}
+
 void Stream::stop() {
     // Runtime guard: match all other public methods. assert alone compiles
     // out in NDEBUG builds, leaving UB on default-constructed/moved-from streams.
@@ -416,32 +445,7 @@ void Stream::stop() {
         return;
     }
 
-    // Capture the mode before resetting - we need it to pick the right
-    // Error-delivery path for the pending Awaiter below.
-    auto mode = self->active_read_mode;
-
-    if (mode != Self::ReadMode::NONE) {
-        uv::read_stop(self->stream);
-        self->active_read_mode = Self::ReadMode::NONE;
-    }
-
-    if (self->reader.has_waiter()) {
-        auto *reader = self->reader.waiter;
-        self->reader.disarm();
-
-        // For buffered reads (StreamReadAwait), await_resume() returns
-        // self->error_code, so setting it here is sufficient.
-        self->error_code = Error::k_operation_aborted;
-
-        // For direct reads (StreamReadSomeAwait), await_resume() returns
-        // aw->out instead of self->error_code. Propagate the Error there too
-        // so the caller observes operation_aborted rather than a default Error.
-        if (mode == Self::ReadMode::DIRECT) {
-            static_cast<StreamReadSomeAwait *>(reader)->out = outcome_error(Error::k_operation_aborted);
-        }
-
-        reader->complete();
-    }
+    self->abort_reader(Error::k_operation_aborted);
 }
 
 Task<void, Error> Stream::write(std::span<const char> data) {

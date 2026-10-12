@@ -36,7 +36,8 @@ struct Timer {
     ///
     /// Single-consumer: a second concurrent wait fails with
     /// k_connection_already_in_progress rather than resuming as if the Timer
-    /// had fired.
+    /// had fired. Destroying the watcher (any of the types in this header)
+    /// completes a pending wait with k_operation_aborted.
     Task<void, Error> wait();
 
 private:

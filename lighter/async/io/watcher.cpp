@@ -4,6 +4,7 @@
 #include <chrono>
 #include <csignal>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <lighter/types.hpp>
@@ -17,24 +18,32 @@ struct Timer::Self : uv::handle<Timer::Self, uv_timer_t> {
     uv_timer_t handle{};
     IoOp *waiter = nullptr;
     i32 pending = 0;
+
+    void abort_waiters() noexcept;
 };
 
 struct Idle::Self : uv::handle<Idle::Self, uv_idle_t> {
     uv_idle_t handle{};
     IoOp *waiter = nullptr;
     i32 pending = 0;
+
+    void abort_waiters() noexcept;
 };
 
 struct Prepare::Self : uv::handle<Prepare::Self, uv_prepare_t> {
     uv_prepare_t handle{};
     IoOp *waiter = nullptr;
     i32 pending = 0;
+
+    void abort_waiters() noexcept;
 };
 
 struct Check::Self : uv::handle<Check::Self, uv_check_t> {
     uv_check_t handle{};
     IoOp *waiter = nullptr;
     i32 pending = 0;
+
+    void abort_waiters() noexcept;
 };
 
 namespace {
@@ -46,8 +55,19 @@ struct BasicTickAwait : uv::AwaitOp<BasicTickAwait<SelfT, HandleT>> {
 
     // Watcher self that owns waiter/pending counters.
     SelfT *self;
+    // Set when the watcher is destroyed under this wait.
+    Error error{};
 
     explicit BasicTickAwait(SelfT *watcher) : self(watcher) {}
+
+    // Called by destroy(): the handle closes without another tick, so a
+    // pending wait() completes with k_operation_aborted instead of hanging.
+    static void abort(SelfT &watcher) noexcept {
+        if (auto *w = std::exchange(watcher.waiter, nullptr)) {
+            static_cast<BasicTickAwait *>(w)->error = Error::k_operation_aborted;
+            w->complete();
+        }
+    }
 
     // Cancelling one wait only disarms the waiter. The handle is shared state
     // that only start()/stop() control (wait() never starts it), so a repeating
@@ -85,14 +105,15 @@ struct BasicTickAwait : uv::AwaitOp<BasicTickAwait<SelfT, HandleT>> {
         return this->attach(waiting.promise(), loc);
     }
 
-    void await_resume() noexcept {
-        if (self && self->pending > 0) {
+    Error await_resume() noexcept {
+        if (self && !error && self->pending > 0) {
             self->pending -= 1;
         }
 
         if (self) {
             self->waiter = nullptr;
         }
+        return error;
     }
 };
 
@@ -102,6 +123,11 @@ using prepare_await = BasicTickAwait<Prepare::Self, uv_prepare_t>;
 using check_await = BasicTickAwait<Check::Self, uv_check_t>;
 
 } // namespace
+
+void Timer::Self::abort_waiters() noexcept { timer_await::abort(*this); }
+void Idle::Self::abort_waiters() noexcept { idle_await::abort(*this); }
+void Prepare::Self::abort_waiters() noexcept { prepare_await::abort(*this); }
+void Check::Self::abort_waiters() noexcept { check_await::abort(*this); }
 
 #define LIGHTER_DEFINE_WATCHER_SPECIAL_MEMBERS(WatcherType)                               \
     WatcherType::WatcherType() noexcept = default;                                        \
@@ -161,7 +187,9 @@ Task<void, Error> Timer::wait() {
         co_await fail(Error::k_connection_already_in_progress);
     }
 
-    co_await timer_await{self.get()};
+    if (auto err = co_await timer_await{self.get()}) {
+        co_await fail(err);
+    }
 }
 
 #define LIGHTER_DEFINE_TICK_WATCHER_METHODS(WatcherType, HandleType, AwaiterType, INIT_FN, START_FN, STOP_FN) \
@@ -206,7 +234,9 @@ Task<void, Error> Timer::wait() {
             co_await fail(Error::k_connection_already_in_progress);                                           \
         }                                                                                                     \
                                                                                                               \
-        co_await AwaiterType{self.get()};                                                                     \
+        if (auto err = co_await AwaiterType{self.get()}) {                                                    \
+            co_await fail(err);                                                                               \
+        }                                                                                                     \
     }
 
 LIGHTER_DEFINE_TICK_WATCHER_METHODS(Idle, uv_idle_t, idle_await, uv::idle_init, uv::idle_start, uv::idle_stop)

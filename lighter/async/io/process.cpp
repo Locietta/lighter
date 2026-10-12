@@ -62,6 +62,10 @@ struct Process::Self : uv::handle<Process::Self, uv_process_t>, uv::LatchedDeliv
 #else
     bool process_group = false;
 #endif
+
+    /// Called by destroy(): the exit callback never fires once the handle is
+    /// closed, so a pending wait() completes with k_operation_aborted.
+    void abort_waiters() noexcept;
 };
 
 namespace {
@@ -113,6 +117,8 @@ struct ProcessAwait : uv::AwaitOp<ProcessAwait> {
     Process::Self *self;
     // Exit status slot filled by Process exit callback.
     Process::ExitStatus result{};
+    // Set instead of `result` when the wait is aborted.
+    Error error{};
 
     explicit ProcessAwait(Process::Self *self) : self(self) {}
 
@@ -141,11 +147,24 @@ struct ProcessAwait : uv::AwaitOp<ProcessAwait> {
         if (self) {
             self->disarm();
         }
+        if (error) {
+            return outcome_error(error);
+        }
         return result;
     }
 };
 
 } // namespace
+
+void Process::Self::abort_waiters() noexcept {
+    if (!has_waiter()) {
+        return;
+    }
+    auto *aw = static_cast<ProcessAwait *>(waiter);
+    aw->error = Error::k_operation_aborted;
+    disarm();
+    aw->complete();
+}
 
 Process::Process() noexcept = default;
 

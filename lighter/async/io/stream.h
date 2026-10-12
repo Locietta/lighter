@@ -17,6 +17,10 @@ template <typename Stream>
 struct Acceptor;
 
 /// Base Stream wrapper for pipe and TCP handles.
+///
+/// Destroying a Stream completes a pending read with k_operation_aborted; a
+/// pending write completes when libuv retires it during the close, normally
+/// with UV_ECANCELED.
 struct Stream {
     Stream() noexcept;
 
@@ -97,6 +101,7 @@ struct Acceptor {
     Self *operator->() noexcept;
 
     /// Accept one connection; only one pending accept is allowed at a time.
+    /// Destroying the Acceptor completes it with k_operation_aborted.
     Task<Stream, Error> accept();
 
     /// Stop pending accept which will complete with Error::k_operation_aborted. If no accept is

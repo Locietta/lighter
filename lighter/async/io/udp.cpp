@@ -23,6 +23,17 @@ struct Udp::Self : uv::handle<Udp::Self, uv_udp_t> {
 
     uv::WaiterBinding<Error> send;
     bool send_inflight = false;
+
+    /// Completes a pending recv() with k_operation_aborted.
+    void abort_recv() noexcept {
+        if (recv.has_waiter()) {
+            recv.try_deliver(Result<Udp::RecvResult>(outcome_error(Error::k_operation_aborted)));
+        }
+    }
+
+    /// Called by destroy(). An in-flight send is retired by libuv with
+    /// UV_ECANCELED when the handle closes.
+    void abort_waiters() noexcept { abort_recv(); }
 };
 
 namespace {
@@ -502,9 +513,7 @@ Error Udp::stop_recv() {
     self->receiving = false;
 
     // With receiving stopped nothing would ever complete a pending recv().
-    if (self->recv.has_waiter()) {
-        self->recv.try_deliver(Result<RecvResult>(outcome_error(Error::k_operation_aborted)));
-    }
+    self->abort_recv();
     return {};
 }
 

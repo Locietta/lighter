@@ -123,7 +123,8 @@ struct Process {
     /// Spawn a child Process within the given loop.
     static Result<SpawnResult> spawn(const Options &opts, EventLoop &loop = EventLoop::current());
 
-    /// Await Process termination and fetch exit status.
+    /// Await Process termination and fetch exit status. Destroying the
+    /// Process completes a pending wait with k_operation_aborted.
     Task<WaitResult> wait();
 
     /// Retrieve OS pid for the Process; -1 if not started.
