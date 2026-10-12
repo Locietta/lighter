@@ -67,10 +67,18 @@ private:
     /// incomplete sequence remains for the caller to carry.
     void run(const char *&in, usize &in_left, std::string &out);
 
-    void *cd = nullptr; // iconv_t, kept opaque to avoid leaking <iconv.h>
+    /// How many input bytes one replacement stands for when conversion stops
+    /// at `in` with EILSEQ: a whole character when the input is valid but
+    /// unconvertible, otherwise one code unit of the source encoding.
+    usize skip_length(const char *in, usize in_left);
+
+    void *cd = nullptr;    // iconv_t, kept opaque to avoid leaking <iconv.h>
+    void *probe = nullptr; // iconv_t source -> UTF-8, only used by skip_length()
     std::string carry;
     std::string replacement;
-    bool utf8_input = false; // enables whole-sequence skips on invalid input
+    u8 unit = 1;                  // code unit size of the source encoding
+    bool utf8_input = false;      // enables whole-sequence skips on invalid input
+    bool stateful_target = false; // target has shift states (ISO-2022-JP)
 };
 
 /// One-shot convenience: decode a whole buffer into UTF-8.

@@ -87,16 +87,23 @@ std::optional<std::string_view> lookup_label(std::string_view lowered) noexcept 
     return std::nullopt;
 }
 
+struct TargetInfo {
+    std::string replacement = "?";
+    bool stateful = false;
+};
+
 /// The bytes of the replacement character in the target encoding: U+FFFD
 /// where representable, otherwise '?'. Computed once per Transcoder with a
 /// scratch descriptor so any target encoding works (e.g. FD FF for UTF-16LE).
-std::string replacement_for(const char *to_name) {
+/// Also detects shift-state targets: after a non-ASCII character they need a
+/// sequence to return to the initial state.
+TargetInfo target_info(const char *to_name) {
+    TargetInfo info;
     iconv_t cd = iconv_open(to_name, "UTF-8");
     if (cd == reinterpret_cast<iconv_t>(-1)) {
-        return "?";
+        return info;
     }
 
-    std::string result = "?";
     for (const std::string_view candidate : {std::string_view(utf8::k_replacement), std::string_view("?")}) {
         iconv(cd, nullptr, nullptr, nullptr, nullptr); // reset shift state
         const char *in = candidate.data();
@@ -108,12 +115,50 @@ std::string replacement_for(const char *to_name) {
             continue;
         }
         iconv(cd, nullptr, nullptr, &dst, &dst_left); // shift back to be self-contained
-        result.assign(buf, sizeof(buf) - dst_left);
+        info.replacement.assign(buf, sizeof(buf) - dst_left);
         break;
     }
 
+    // U+3042 (HIRAGANA A) leaves ISO-2022-JP in JIS mode; stateless targets
+    // emit nothing when reset.
+    constexpr std::string_view k_probe = "\xE3\x81\x82";
+    iconv(cd, nullptr, nullptr, nullptr, nullptr);
+    const char *in = k_probe.data();
+    usize in_left = k_probe.size();
+    char buf[32];
+    char *dst = buf;
+    usize dst_left = sizeof(buf);
+    if (iconv(cd, InArg{&in}, &in_left, &dst, &dst_left) != k_iconv_failed) {
+        char *shift = dst;
+        iconv(cd, nullptr, nullptr, &dst, &dst_left);
+        info.stateful = dst != shift;
+    }
+
     iconv_close(cd);
-    return result;
+    return info;
+}
+
+/// Code unit size of a (canonical or raw) iconv source encoding name.
+u8 code_unit_size(std::string_view name) noexcept {
+    const auto starts_with = [name](std::string_view prefix) {
+        if (name.size() < prefix.size()) {
+            return false;
+        }
+        for (usize i = 0; i < prefix.size(); ++i) {
+            const char c = name[i];
+            if (((c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c) != prefix[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (starts_with("UTF-32") || starts_with("UTF32") || starts_with("UCS-4") || starts_with("UCS4")) {
+        return 4;
+    }
+    if (starts_with("UTF-16") || starts_with("UTF16") || starts_with("UCS-2") || starts_with("UCS2")) {
+        return 2;
+    }
+    return 1;
 }
 
 } // namespace
@@ -149,23 +194,38 @@ Result<Transcoder> Transcoder::open(std::string_view from, std::string_view to) 
     Transcoder out;
     out.cd = cd;
     out.utf8_input = from_name == "UTF-8";
-    out.replacement = replacement_for(to_name.c_str());
+    out.unit = code_unit_size(from_name);
+    if (!out.utf8_input) {
+        // Optional: without it, invalid input is skipped one code unit at a time.
+        if (iconv_t probe = iconv_open("UTF-8", from_name.c_str()); probe != reinterpret_cast<iconv_t>(-1)) {
+            out.probe = probe;
+        }
+    }
+    auto target = target_info(to_name.c_str());
+    out.replacement = std::move(target.replacement);
+    out.stateful_target = target.stateful;
     return out;
 }
 
 Transcoder::Transcoder(Transcoder &&other) noexcept
-    : cd(std::exchange(other.cd, nullptr)), carry(std::move(other.carry)), replacement(std::move(other.replacement)),
-      utf8_input(other.utf8_input) {}
+    : cd(std::exchange(other.cd, nullptr)), probe(std::exchange(other.probe, nullptr)), carry(std::move(other.carry)),
+      replacement(std::move(other.replacement)), unit(other.unit), utf8_input(other.utf8_input), stateful_target(other.stateful_target) {}
 
 Transcoder &Transcoder::operator=(Transcoder &&other) noexcept {
     if (this != &other) {
         if (cd != nullptr) {
             iconv_close(static_cast<iconv_t>(cd));
         }
+        if (probe != nullptr) {
+            iconv_close(static_cast<iconv_t>(probe));
+        }
         cd = std::exchange(other.cd, nullptr);
+        probe = std::exchange(other.probe, nullptr);
         carry = std::move(other.carry);
         replacement = std::move(other.replacement);
+        unit = other.unit;
         utf8_input = other.utf8_input;
+        stateful_target = other.stateful_target;
     }
     return *this;
 }
@@ -174,6 +234,41 @@ Transcoder::~Transcoder() {
     if (cd != nullptr) {
         iconv_close(static_cast<iconv_t>(cd));
     }
+    if (probe != nullptr) {
+        iconv_close(static_cast<iconv_t>(probe));
+    }
+}
+
+usize Transcoder::skip_length(const char *in, usize in_left) {
+    if (utf8_input) {
+        return utf8::decode_one(std::string_view(in, in_left)).size;
+    }
+    if (probe != nullptr) {
+        // Find the shortest prefix that decodes to one character. If there is
+        // one, the source was valid and only the target could not represent
+        // it, so the whole character is replaced (GBK D6 D0 into CP1252 skips
+        // both bytes instead of re-reading D0 as a lead byte).
+        constexpr usize k_max_char_bytes = 8;
+        for (usize length = unit; length <= in_left && length <= k_max_char_bytes; length += unit) {
+            iconv(static_cast<iconv_t>(probe), nullptr, nullptr, nullptr, nullptr);
+            const char *p = in;
+            usize p_left = length;
+            char buf[16];
+            char *dst = buf;
+            usize dst_left = sizeof(buf);
+            if (iconv(static_cast<iconv_t>(probe), InArg{&p}, &p_left, &dst, &dst_left) != k_iconv_failed) {
+                if (p_left == 0 && dst != buf) {
+                    return length;
+                }
+                continue; // only a shift sequence so far
+            }
+            if (errno != EINVAL) {
+                break; // invalid at this length: not a character
+            }
+        }
+    }
+    // Invalid input: drop one code unit, keeping UTF-16/UTF-32 aligned.
+    return unit;
 }
 
 void Transcoder::run(const char *&in, usize &in_left, std::string &out) {
@@ -193,16 +288,22 @@ void Transcoder::run(const char *&in, usize &in_left, std::string &out) {
         }
 
         // EILSEQ: invalid input, or valid input the target cannot represent.
-        // Replace and continue, mirroring utf8::Sanitizer. For UTF-8 input,
-        // skip the whole maximal subpart / character so one bad or
-        // unconvertible character yields exactly one replacement; for legacy
-        // input, one byte per replacement matches the usual decoder behavior.
-        out.append(replacement);
-        usize skip = 1;
-        if (utf8_input) {
-            skip = utf8::decode_one(std::string_view(in, in_left)).size;
+        // Replace and continue, mirroring utf8::Sanitizer: one replacement per
+        // unconvertible character or invalid code unit (per maximal subpart
+        // for UTF-8 input).
+        if (stateful_target) {
+            // The replacement bytes are in the target's initial shift state, so
+            // return there first (ISO-2022-JP would otherwise read '?' as a
+            // JIS byte). This also resets any input shift state, which only
+            // matters for the rare stateful-to-stateful pair.
+            char shift[16];
+            char *shift_dst = shift;
+            usize shift_left = sizeof(shift);
+            iconv(static_cast<iconv_t>(cd), nullptr, nullptr, &shift_dst, &shift_left);
+            out.append(shift, sizeof(shift) - shift_left);
         }
-        skip = std::clamp<usize>(skip, 1, in_left);
+        out.append(replacement);
+        const usize skip = std::clamp<usize>(skip_length(in, in_left), 1, in_left);
         in += skip;
         in_left -= skip;
     }
@@ -231,19 +332,20 @@ void Transcoder::feed(std::string_view bytes, std::string &out) {
 }
 
 void Transcoder::finish(std::string &out) {
-    if (!carry.empty()) {
-        // a truncated trailing sequence can no longer complete
-        out.append(replacement);
-        carry.clear();
-    }
-
     // emit the closing shift sequence of stateful targets (ISO-2022-JP) and
-    // reset the conversion state so the Transcoder is reusable
+    // reset the conversion state so the Transcoder is reusable; it goes
+    // before a final replacement, whose bytes are in the initial state
     char buf[64];
     char *dst = buf;
     usize dst_left = sizeof(buf);
     iconv(static_cast<iconv_t>(cd), nullptr, nullptr, &dst, &dst_left);
     out.append(buf, sizeof(buf) - dst_left);
+
+    if (!carry.empty()) {
+        // a truncated trailing sequence can no longer complete
+        out.append(replacement);
+        carry.clear();
+    }
 }
 
 Result<std::string> to_utf8(std::string_view bytes, std::string_view from) {
