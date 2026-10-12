@@ -22,8 +22,7 @@ usize RingBuffer::read(char *dest, usize len) {
         std::memcpy(dest + first_chunk, storage.get(), remaining);
     }
 
-    head = (head + to_read) % capacity;
-    size -= to_read;
+    advance_read(to_read);
     return to_read;
 }
 
@@ -54,6 +53,13 @@ void RingBuffer::advance_read(usize len) {
 
     head = (head + len) % capacity;
     size -= len;
+
+    // Rewind an empty buffer so the next write gets the whole capacity as
+    // one contiguous span instead of the tail end of the storage.
+    if (size == 0) {
+        head = 0;
+        tail = 0;
+    }
 }
 
 std::pair<char *, usize> RingBuffer::get_write_ptr() {
