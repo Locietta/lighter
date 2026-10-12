@@ -2,10 +2,13 @@
 
 #include <expected>
 #include <functional>
+#include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include <lighter/http/common.h>
 #include <lighter/http/curl.h>
+#include <lighter/http/runtime.h>
 #include <lighter/async/io/loop.h>
 #include <lighter/types.hpp>
 
@@ -72,7 +75,11 @@ private:
 
     socket_context *ensure_socket(curl_socket_t socket) noexcept;
 
-    void update_socket(curl_socket_t socket, int action, void *socketp) noexcept;
+    void update_socket(CURL *easy, curl_socket_t socket, int action, void *socketp) noexcept;
+
+    /// Queue `easy`'s transfer to fail at the next drain: its socket cannot be
+    /// watched, so it would otherwise stall until its timeout, if it has one.
+    void fail_unwatchable(CURL *easy) noexcept;
 
     void update_timeout(long timeout_ms) noexcept;
 
@@ -90,6 +97,8 @@ private:
     curl::MultiHandle multi;
     timer_context *timer = nullptr;
     std::unordered_map<curl_socket_t, socket_context *> sockets;
+    /// Filled from the socket callback, which must not touch the multi.
+    std::vector<std::weak_ptr<detail::InflightRequestState>> unwatchable;
     usize active_requests = 0;
 };
 

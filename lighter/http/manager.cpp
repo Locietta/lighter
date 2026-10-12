@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <lighter/async/detail/libuv_helper.h>
+#include <lighter/http/inflight_request.h>
 #include <lighter/http/runtime.h>
 
 namespace lighter::http {
@@ -161,7 +162,7 @@ void Manager::drain_completed() noexcept { drain_completed_impl(nullptr); }
 void Manager::drain_completed_arming(void *arming_request) noexcept { drain_completed_impl(arming_request); }
 
 void Manager::drain_completed_impl(void *arming_request) noexcept {
-    std::vector<std::pair<detail::InflightRequestRef, curl::EasyError>> deferred;
+    std::vector<std::pair<detail::InflightRequestRef, Error>> deferred;
     int pending = 0;
     while (auto *msg = curl::multi_info_read(multi.get(), &pending)) {
         if (msg->msg != CURLMSG_DONE) {
@@ -190,15 +191,33 @@ void Manager::drain_completed_impl(void *arming_request) noexcept {
         }
 
         detail::mark_inflight_request_removed(request);
-        deferred.emplace_back(std::move(request), result);
+        deferred.emplace_back(std::move(request), Error::from_curl(result));
+    }
+
+    // Before anything is resumed below, while every queued transfer that is
+    // still registered is known to own its easy handle.
+    for (auto &weak : std::exchange(unwatchable, {})) {
+        auto request = weak.lock();
+        if (!request || !request->registered || request->completed || request->request_released || !request->request.easy) {
+            continue;
+        }
+
+        remove_request(request->request.easy.get());
+        detail::mark_inflight_request_removed(request);
+        auto err = Error::from_curl(CURLE_FAILED_INIT, "failed to watch the transfer's socket on the event loop");
+        if (arming_request != nullptr && detail::inflight_request_opaque(request) == arming_request) {
+            request->complete(std::move(err), false);
+            continue;
+        }
+        deferred.emplace_back(std::move(request), std::move(err));
     }
 
     if (deferred.empty()) {
         return;
     }
 
-    for (auto &[request, result] : deferred) {
-        detail::complete_inflight_request(request, result, false);
+    for (auto &[request, err] : deferred) {
+        request->complete(std::move(err), true);
     }
 }
 
@@ -221,13 +240,24 @@ Manager::socket_context *Manager::ensure_socket(curl_socket_t socket) noexcept {
     return context;
 }
 
-void Manager::update_socket(curl_socket_t socket, int action, void *socketp) noexcept {
+void Manager::fail_unwatchable(CURL *easy) noexcept {
+    void *opaque = nullptr;
+    if (auto err = curl::getinfo(easy, CURLINFO_PRIVATE, &opaque); !curl::ok(err) || !opaque) {
+        return;
+    }
+    if (auto request = detail::retain_inflight_request(opaque)) {
+        unwatchable.push_back(request);
+    }
+}
+
+void Manager::update_socket(CURL *easy, curl_socket_t socket, int action, void *socketp) noexcept {
     switch (action) {
         case CURL_POLL_IN:
         case CURL_POLL_OUT:
         case CURL_POLL_INOUT: {
             auto *context = socketp ? static_cast<socket_context *>(socketp) : ensure_socket(socket);
             if (!context) {
+                fail_unwatchable(easy);
                 return;
             }
 
@@ -241,7 +271,9 @@ void Manager::update_socket(curl_socket_t socket, int action, void *socketp) noe
                 events |= UV_READABLE;
             }
 
-            [[maybe_unused]] auto err = uv::poll_start(context->handle, events, &Manager::on_uv_socket);
+            if (auto err = uv::poll_start(context->handle, events, &Manager::on_uv_socket)) {
+                fail_unwatchable(easy);
+            }
             return;
         }
 
@@ -311,13 +343,13 @@ void Manager::close_watchers() noexcept {
     }
 }
 
-int Manager::on_curl_socket(CURL *, curl_socket_t socket, int action, void *userp, void *socketp) noexcept {
+int Manager::on_curl_socket(CURL *easy, curl_socket_t socket, int action, void *userp, void *socketp) noexcept {
     auto *self = static_cast<Manager *>(userp);
     if (!self) {
         return 0;
     }
 
-    self->update_socket(socket, action, socketp);
+    self->update_socket(easy, socket, action, socketp);
     return 0;
 }
 
