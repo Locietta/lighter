@@ -57,10 +57,7 @@ struct RequestAwaiter : uv::AwaitOp<RequestAwaiter> {
 
     InflightRequestRef state;
 
-    RequestAwaiter(Manager &manager, InflightRequestRef request_state) : state(std::move(request_state)) {
-        state->mgr = &manager;
-        state->awaiter = this;
-    }
+    RequestAwaiter(Manager &manager, InflightRequestRef request_state) : state(std::move(request_state)) { state->mgr = &manager; }
 
     ~RequestAwaiter() {
         if (!state) {
@@ -87,6 +84,12 @@ struct RequestAwaiter : uv::AwaitOp<RequestAwaiter> {
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_t> waiting,
                                           std::source_location loc = std::source_location::current()) noexcept {
+        // Published only now: before attach() the op has no parent to resume,
+        // yet start() drains completions and resumes other coroutines inline,
+        // and those can finish this transfer too (complete() then only records
+        // it, for await_ready()). attach() may cancel and destroy this awaiter
+        // on the spot, so it is published first and nothing follows attach().
+        state->awaiter = this;
         return this->attach(waiting.promise(), loc);
     }
 
