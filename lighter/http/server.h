@@ -39,6 +39,8 @@ struct ServerResponse {
     /// A name that is not an RFC 9110 token, or a value containing CR, LF or
     /// NUL, would split the response: the server sends a 500 instead.
     std::vector<Header> headers;
+    /// For HEAD, either the GET body (only its length is sent) or empty (no
+    /// Content-Length is sent).
     std::string body;
 
     static ServerResponse text(i32 status, std::string body, std::string_view content_type = "text/plain; charset=utf-8");

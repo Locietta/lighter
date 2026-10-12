@@ -272,7 +272,9 @@ std::string serialize(const ServerResponse &response, bool keep_alive, bool head
     }
 
     const bool bodyless = response.status < 200 || response.status == 204 || response.status == 304;
-    if (!bodyless) {
+    // A HEAD answer's Content-Length must be the GET body's: send it only when
+    // the handler supplied that body, never a misleading 0.
+    if (!bodyless && !(head_request && response.body.empty())) {
         out += std::format("Content-Length: {}\r\n", response.body.size());
     }
     if (!keep_alive) {
