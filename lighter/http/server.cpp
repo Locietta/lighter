@@ -249,6 +249,18 @@ Task<Next> read_next(Connection &connection) {
     }
 }
 
+/// RFC 9110 tchar, the alphabet of a field name.
+bool is_token_char(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || std::string_view("!#$%&'*+-.^_`|~").contains(c);
+}
+
+/// A header that serializes as exactly one field line: anything else lets a
+/// handler echoing client input split the response.
+bool writable_header(const Header &header) {
+    return !header.name.empty() && std::ranges::all_of(header.name, is_token_char) &&
+           header.value.find_first_of(std::string_view("\r\n\0", 3)) == std::string::npos;
+}
+
 std::string serialize(const ServerResponse &response, bool keep_alive, bool head_request) {
     auto out = std::format("HTTP/1.1 {} {}\r\n", response.status, status_reason(response.status));
     for (const auto &header : response.headers) {
@@ -337,6 +349,10 @@ Task<> serve_connection(Server::Self &server, Tcp stream, Handler &handler) {
         connection.parse.stop = Parse::Stop::NONE;
 
         auto response = co_await invoke(handler, std::move(request));
+        if (!std::ranges::all_of(response.headers, writable_header)) {
+            // A handler bug, answered like a handler that threw.
+            response = ServerResponse::text(500, "internal server error\n");
+        }
         const bool keep_alive = wants_keep_alive && !server.stopping;
         if (!co_await send(connection, serialize(response, keep_alive, head_request)) || !keep_alive) {
             co_return;

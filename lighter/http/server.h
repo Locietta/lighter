@@ -36,6 +36,8 @@ struct ServerRequest {
 struct ServerResponse {
     i32 status = 200;
     /// Content-Length, Connection and Transfer-Encoding are written by the server.
+    /// A name that is not an RFC 9110 token, or a value containing CR, LF or
+    /// NUL, would split the response: the server sends a 500 instead.
     std::vector<Header> headers;
     std::string body;
 
