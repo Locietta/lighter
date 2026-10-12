@@ -414,8 +414,18 @@ void Server::stop() {
     }
     self->stopping = true;
     std::ignore = self->acceptor.stop();
+    // stream.stop() resumes the reader inline: its serve_connection() returns
+    // and the TaskGroup reclaims the frame, whose ~ServerConnection erases it
+    // from `connections`. Stop from a snapshot, and skip any entry that an
+    // earlier stop has already torn down.
+    std::vector<detail::ServerConnection *> idle;
     for (auto *connection : self->connections) {
         if (connection->idle) {
+            idle.push_back(connection);
+        }
+    }
+    for (auto *connection : idle) {
+        if (std::ranges::contains(self->connections, connection) && connection->idle) {
             connection->stream.stop();
         }
     }
