@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -15,7 +17,11 @@
 
 namespace lighter::http::detail {
 
+/// Cookies, DNS cache and TLS sessions shared by every copy of a Client. The
+/// copies may run on different loops and threads, so the share handle locks
+/// each kind of data through `locks`; declared first, they outlive `share`.
 struct SharedResources {
+    std::array<std::mutex, CURL_LOCK_DATA_LAST> locks;
     curl::ShareHandle share{};
 };
 

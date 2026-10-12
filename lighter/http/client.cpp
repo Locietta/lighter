@@ -1,8 +1,10 @@
 #include "client.h"
 
+#include <contracts>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 #include <lighter/http/bound_client.h>
@@ -21,6 +23,18 @@ std::shared_ptr<detail::SharedResources> require_shared_resources() {
     return resources;
 }
 
+std::mutex &share_lock(curl_lock_data data, void *userptr) {
+    auto *resources = static_cast<detail::SharedResources *>(userptr);
+    contract_assert(resources != nullptr);
+    const auto index = static_cast<usize>(data);
+    contract_assert(index < resources->locks.size());
+    return resources->locks[index];
+}
+
+void lock_share(CURL *, curl_lock_data data, curl_lock_access, void *userptr) { share_lock(data, userptr).lock(); }
+
+void unlock_share(CURL *, curl_lock_data data, void *userptr) { share_lock(data, userptr).unlock(); }
+
 } // namespace
 
 std::shared_ptr<detail::SharedResources> detail::make_shared_resources() {
@@ -31,6 +45,13 @@ std::shared_ptr<detail::SharedResources> detail::make_shared_resources() {
     auto resources = std::make_shared<detail::SharedResources>();
     resources->share = curl::ShareHandle::create();
     if (!resources->share) {
+        return {};
+    }
+
+    // One Client's copies may drive transfers from several threads at once.
+    if (!curl::ok(curl::share_setopt(resources->share.get(), CURLSHOPT_LOCKFUNC, &lock_share)) ||
+        !curl::ok(curl::share_setopt(resources->share.get(), CURLSHOPT_UNLOCKFUNC, &unlock_share)) ||
+        !curl::ok(curl::share_setopt(resources->share.get(), CURLSHOPT_USERDATA, static_cast<void *>(resources.get())))) {
         return {};
     }
 
