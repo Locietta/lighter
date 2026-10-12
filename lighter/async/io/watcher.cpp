@@ -4,7 +4,6 @@
 #include <chrono>
 #include <csignal>
 #include <memory>
-#include <type_traits>
 #include <vector>
 
 #include <lighter/types.hpp>
@@ -50,18 +49,13 @@ struct BasicTickAwait : uv::AwaitOp<BasicTickAwait<SelfT, HandleT>> {
 
     explicit BasicTickAwait(SelfT *watcher) : self(watcher) {}
 
+    // Cancelling one wait only disarms the waiter. The handle is shared state
+    // that only start()/stop() control (wait() never starts it), so a repeating
+    // Timer, or a watcher whose wait lost a WhenAny race, keeps running and
+    // later ticks are counted in `pending` for the next wait().
     static void on_cancel(IoOp *op) {
         await_base::complete_cancel(op, [](auto &aw) {
             if (aw.self) {
-                if constexpr (std::is_same_v<HandleT, uv_timer_t>) {
-                    uv::timer_stop(aw.self->handle);
-                } else if constexpr (std::is_same_v<HandleT, uv_idle_t>) {
-                    uv::idle_stop(aw.self->handle);
-                } else if constexpr (std::is_same_v<HandleT, uv_prepare_t>) {
-                    uv::prepare_stop(aw.self->handle);
-                } else if constexpr (std::is_same_v<HandleT, uv_check_t>) {
-                    uv::check_stop(aw.self->handle);
-                }
                 aw.self->waiter = nullptr;
             }
         });
