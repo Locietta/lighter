@@ -171,8 +171,9 @@ struct StreamReadSomeAwait : uv::AwaitOp<StreamReadSomeAwait> {
             return;
         }
 
+        // Clamp rather than wrap: a destination over 4 GiB just reads short.
         buf->base = aw->dst.data();
-        buf->len = static_cast<u32>(aw->dst.size());
+        buf->len = static_cast<u32>(std::min<usize>(aw->dst.size(), std::numeric_limits<u32>::max()));
     }
 
     // When nread=0, it means no data was read but the Stream is still alive (e.g., EAGAIN).
@@ -450,6 +451,12 @@ Task<void, Error> Stream::write(std::span<const char> data) {
 
     if (self->writer.has_waiter()) {
         co_await fail(Error::k_invalid_argument);
+    }
+
+    // uv_buf_t lengths are 32-bit on Windows; reject instead of truncating,
+    // the same way try_write() does.
+    if (data.size() > static_cast<usize>(std::numeric_limits<u32>::max())) {
+        co_await fail(Error::k_value_too_large_for_defined_data_type);
     }
 
     if (auto err = co_await StreamWriteAwait{self.get(), data}) {

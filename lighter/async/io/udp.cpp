@@ -1,7 +1,9 @@
 #include "udp.h"
 
 #include <contracts>
+#include <limits>
 #include <optional>
+#include <span>
 #include <utility>
 
 #include <lighter/types.hpp>
@@ -26,6 +28,10 @@ struct Udp::Self : uv::handle<Udp::Self, uv_udp_t> {
 namespace {
 
 constexpr usize k_udp_recv_buffer_size = 64 * 1024;
+
+/// uv_buf_t lengths are 32-bit on Windows. No datagram can be that large, so
+/// report what the kernel would instead of silently truncating the payload.
+bool exceeds_buf_len(std::span<const char> data) noexcept { return data.size() > static_cast<usize>(std::numeric_limits<u32>::max()); }
 
 static Udp::Self::pointer make_udp_self() {
     auto self = Udp::Self::make();
@@ -264,6 +270,11 @@ struct UdpSendAwait : uv::AwaitOp<UdpSendAwait> {
             return waiting;
         }
 
+        if (exceeds_buf_len(storage)) {
+            result = Error::k_message_too_long;
+            return waiting;
+        }
+
         self->send.arm(*this, result);
 
         uv_buf_t buf = uv::buf_init(storage.empty() ? nullptr : storage.data(), static_cast<u32>(storage.size()));
@@ -455,6 +466,10 @@ Error Udp::try_send(std::span<const char> data, std::string_view host, i32 port)
         return resolved.error();
     }
 
+    if (exceeds_buf_len(data)) {
+        return Error::k_message_too_long;
+    }
+
     uv_buf_t buf = uv::buf_init(const_cast<char *>(data.data()), static_cast<u32>(data.size()));
     if (auto sent =
             uv::udp_try_send(self->handle, std::span<const uv_buf_t>{&buf, 1}, reinterpret_cast<const sockaddr *>(&resolved->storage));
@@ -468,6 +483,10 @@ Error Udp::try_send(std::span<const char> data, std::string_view host, i32 port)
 Error Udp::try_send(std::span<const char> data) {
     if (!self) {
         return Error::k_invalid_argument;
+    }
+
+    if (exceeds_buf_len(data)) {
+        return Error::k_message_too_long;
     }
 
     uv_buf_t buf = uv::buf_init(const_cast<char *>(data.data()), static_cast<u32>(data.size()));
