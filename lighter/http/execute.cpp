@@ -120,6 +120,11 @@ void InflightRequestState::complete(Error err, bool resume) noexcept {
     // Event::set defers resumption to the loop's check phase, so signaling
     // here is safe from any curl/uv callback context.
     if (!request_released && request.conduit) {
+        // A clean end means the last header block was final, even one that
+        // on_header held back as a redirect curl then did not follow.
+        if (request.result.kind == ErrorKind::CURL && curl::ok(request.result.curl_code) && request.conduit->pending_status >= 200) {
+            request.conduit->finalize_headers(request.out);
+        }
         request.conduit->body_done = true;
         request.conduit->headers_ready.set();
         request.conduit->readable.set();

@@ -154,8 +154,19 @@ usize InflightRequest::on_header(char *data, usize size, usize count, void *user
 
     if (line.empty()) {
         // end of one header block; for streaming, decide whether it was final
-        if (self->conduit && !self->conduit->intermediate) {
-            self->conduit->finalize_headers(self->out);
+        if (self->conduit) {
+            auto &conduit = *self->conduit;
+            const auto status = conduit.pending_status;
+            // 1xx blocks and redirects curl will follow are not the final
+            // response. curl follows only a 3xx that carries a Location (and
+            // fails the transfer once max_redirects is reached). If it declines
+            // after all, its body bytes (on_write) or the end of the transfer
+            // (InflightRequestState::complete) finalize this block instead.
+            const bool informational = status >= 100 && status < 200;
+            const bool redirected = status >= 300 && status < 400 && conduit.has_location && self->redirect_policy().follow;
+            if (!informational && !redirected) {
+                conduit.finalize_headers(self->out);
+            }
         }
         return bytes;
     }
@@ -171,9 +182,7 @@ usize InflightRequest::on_header(char *data, usize size, usize count, void *user
                 }
             }
             self->conduit->pending_status = status;
-            // 1xx blocks and redirects curl will follow are not the final response
-            const bool redirected = status >= 300 && status < 400 && self->redirect_policy().follow;
-            self->conduit->intermediate = (status >= 100 && status < 200) || redirected;
+            self->conduit->has_location = false;
         }
         return bytes;
     }
@@ -185,6 +194,9 @@ usize InflightRequest::on_header(char *data, usize size, usize count, void *user
 
     auto name = detail::trim_ascii(line.substr(0, colon));
     auto value = detail::trim_ascii(line.substr(colon + 1));
+    if (self->conduit && !value.empty() && detail::iequals(name, "location")) {
+        self->conduit->has_location = true;
+    }
     self->out.headers.push_back({name, value});
     return bytes;
 }

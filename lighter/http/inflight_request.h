@@ -35,7 +35,7 @@ struct StreamConduit {
     std::string buffer;
     usize read_offset = 0;
     long pending_status = 0;   // parsed from the most recent status line
-    bool intermediate = false; // current response is 1xx or a followed redirect
+    bool has_location = false; // the current header block carries a Location
     bool headers_done = false;
     bool paused = false;
     bool body_done = false;
