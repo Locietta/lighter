@@ -83,11 +83,23 @@ Relay &Relay::operator=(Relay &&other) noexcept {
 
 Relay::~Relay() { release_hold(); }
 
+/// Drops this Relay's count and wakes the loop as one step under the Mutex.
+/// Once on_relay observes count == 0 it may unref the handle, uv_run may
+/// return and the EventLoop (and `self`) may be destroyed, so nothing may
+/// touch `self` after the decrement except releasing the Mutex, which
+/// ~EventLoop acquires before tearing down. Holding it also keeps on_relay's
+/// check from slipping between the two steps: it either sees the old count
+/// and is woken again, or sees zero after the wakeup was already queued.
+static void wake_and_drop_hold(Relay::Self *self) noexcept {
+    std::lock_guard lock(self->mutex);
+    self->count.fetch_sub(1, std::memory_order_release);
+    uv::async_send(self->async);
+}
+
 void Relay::release_hold() noexcept {
     if (self && holds > 0) {
         holds = 0;
-        self->count.fetch_sub(1, std::memory_order_release);
-        uv::async_send(self->async);
+        wake_and_drop_hold(self);
     }
     self = nullptr;
 }
@@ -117,8 +129,7 @@ void Relay::release() noexcept {
     if (--holds > 0) {
         return;
     }
-    self->count.fetch_sub(1, std::memory_order_release);
-    uv::async_send(self->async);
+    wake_and_drop_hold(self);
 }
 
 Relay EventLoop::create_relay(Relay::KeepAlive keep_alive) { return Relay(self.get(), keep_alive); }
@@ -274,6 +285,8 @@ EventLoop::~EventLoop() {
     contract_assert(self->count.load(std::memory_order_acquire) == 0);
 
     {
+        // Also waits out a Relay still inside wake_and_drop_hold() on another
+        // thread; after this no Relay touches `self` again.
         std::lock_guard lock(self->mutex);
         self->queue.clear();
     }
