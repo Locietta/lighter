@@ -14,6 +14,10 @@ struct CancellationToken {
     struct State {
         bool is_cancelled() const noexcept { return cancelled.load(std::memory_order_acquire); }
 
+        /// Waking the Event resumes waiters through EventLoop::current(), so
+        /// with waiters present this must run on their loop thread (the
+        /// contract on SyncPrimitive::resume_waiter checks that a loop is
+        /// current). The atomic only makes cancelled() readable elsewhere.
         void cancel() noexcept {
             bool expected = false;
             if (!cancelled.compare_exchange_strong(expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -37,14 +41,17 @@ struct CancellationToken {
         /// essential: it converts "the Cancellation Event has fired" into the
         /// coroutine state `CANCELLED`, which is what with_token(...) and other
         /// callers rely on.
-        Task<> wait() {
-            if (cancelled.load(std::memory_order_acquire)) {
+        ///
+        /// Takes the state by shared_ptr so the Task keeps it alive even if
+        /// every token and the source are gone before it completes.
+        static Task<> wait(std::shared_ptr<State> self) {
+            if (self->cancelled.load(std::memory_order_acquire)) {
                 // Preserve Cancellation semantics for already-fired tokens.
                 co_await lighter::cancel();
             }
 
             // Wait for the sticky Cancellation marker to become observable.
-            co_await event.wait();
+            co_await self->event.wait();
 
             // Being woken by cancel_event means "Cancellation happened"; convert
             // that wakeup into actual Task Cancellation.
@@ -62,7 +69,7 @@ struct CancellationToken {
 
     bool cancelled() const noexcept { return state->is_cancelled(); }
 
-    Task<> wait() const noexcept { return state->wait(); }
+    Task<> wait() const { return State::wait(state); }
 
 private:
     friend struct CancellationSource;
@@ -72,6 +79,17 @@ private:
     std::shared_ptr<State> state;
 };
 
+/// Fires the CancellationTokens it hands out.
+///
+/// Thread affinity: cancelled() may be read from any thread, but cancel()
+/// resumes the tokens' waiters on the calling thread's EventLoop, so it must
+/// run on the loop thread that owns them. From another thread, post it with a
+/// Relay (`relay.send([&source] { source.cancel(); })`). Cancelling while no
+/// Task is waiting on a token needs no loop at all.
+///
+/// Destroying the source cancels its tokens: work guarded by a token never
+/// outlives the scope that can cancel it. Keep the source alive for as long
+/// as its tokens should be able to stay uncancelled.
 struct CancellationSource {
     CancellationSource() : state(std::make_shared<CancellationToken::State>()) {}
 
@@ -80,6 +98,7 @@ struct CancellationSource {
 
     ~CancellationSource() { cancel(); }
 
+    /// Loop-affine when tokens have waiters; see the struct comment.
     void cancel() noexcept { state->cancel(); }
 
     bool cancelled() const noexcept { return state->is_cancelled(); }
