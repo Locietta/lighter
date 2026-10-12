@@ -9,7 +9,6 @@
 #include <vector>
 
 #include <lighter/async/async.h>
-#include <lighter/codec/json/json.h>
 #include <lighter/http/http.h>
 #include <lighter/http/inflight_request.h>
 #include <lighter/types.hpp>
@@ -79,13 +78,9 @@ Task<> consume_sse_stream(i32 port) {
     require(streamed.ok() && streamed.status == 200, "stream() must resolve with the status");
     require(streamed.header_value("content-type") == std::string_view("text/event-stream"), "stream() must expose response headers");
 
-    struct Delta {
-        std::optional<std::string> text;
-    };
-
     http::sse::EventStream events(std::move(streamed));
-    std::string text;
     std::vector<std::string> kinds;
+    std::vector<std::string> payloads;
     while (true) {
         auto next_result = co_await events.next();
         require(static_cast<bool>(next_result), next_result ? std::string() : next_result.error().message());
@@ -94,17 +89,12 @@ Task<> consume_sse_stream(i32 port) {
             break;
         }
         kinds.push_back(event->event);
-        if (event->event == "delta") {
-            auto delta = codec::json::parse<Delta>(event->data);
-            require(static_cast<bool>(delta), "delta payload failed to decode");
-            if (delta->text) {
-                text += *delta->text;
-            }
-        }
+        payloads.push_back(event->data);
     }
 
     require(kinds == std::vector<std::string>({"delta", "delta", "done"}), "unexpected event sequence");
-    require(text == "Hello", "streamed deltas did not reassemble");
+    require(payloads == std::vector<std::string>({R"({"text":"Hel"})", R"({"text":"lo"})", "{}"}),
+            "event payloads split across chunks did not reassemble");
 }
 
 // --- scenario 2: non-2xx branch - check status, drop, transfer aborts -------

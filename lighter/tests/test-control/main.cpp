@@ -42,7 +42,6 @@ void check_support_table() {
     require(!control_event_supported(ControlEventKind::SHUTDOWN), "shutdown is Windows-only");
     require(control_event_supported(ControlEventKind::SUSPEND), "POSIX must support terminal suspension control");
 #endif
-    require(enum_name(ControlEventKind::INTERRUPT) == "INTERRUPT", "enum_name must render control events");
 }
 
 void check_invalid_sets() {

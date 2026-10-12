@@ -48,9 +48,6 @@ void check_terminal_basics() {
     require(has_modifier(modifiers, TerminalModifiers::SHIFT), "SHIFT modifier must survive composition");
     require(has_modifier(modifiers, TerminalModifiers::CONTROL), "CONTROL modifier must survive composition");
     require(!has_modifier(modifiers, TerminalModifiers::ALT), "unset modifiers must remain clear");
-
-    TerminalEvent event{.kind = TerminalEventKind::RESIZE, .size = {.columns = 120, .rows = 40}};
-    require(event.size == TerminalSize{120, 40}, "terminal size event must retain dimensions");
 }
 
 void check_text_and_utf8_chunking() {

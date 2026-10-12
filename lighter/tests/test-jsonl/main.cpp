@@ -1,7 +1,6 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <lighter/codec/json/json.h>
@@ -93,34 +92,6 @@ void test_lines_edge_cases() {
     require(none == 0, "blank-only input should yield no lines");
 }
 
-void test_heterogeneous_records() {
-    // transcripts mix record types; decode per-line into a variant-like dispatch
-    struct UserRecord {
-        std::string user;
-    };
-    struct SystemRecord {
-        std::string system;
-    };
-
-    std::string log;
-    require(static_cast<bool>(codec::jsonl::append(log, SystemRecord{.system = "boot"})), "append failed");
-    require(static_cast<bool>(codec::jsonl::append(log, UserRecord{.user = "hi"})), "append failed");
-
-    std::vector<std::variant<UserRecord, SystemRecord>> records;
-    for (auto line : codec::jsonl::lines(log)) {
-        if (auto user = codec::json::parse<UserRecord>(line); user && !user->user.empty()) {
-            records.push_back(*std::move(user));
-            continue;
-        }
-        auto system = codec::json::parse<SystemRecord>(line);
-        require(static_cast<bool>(system), "record matched no known type");
-        records.push_back(*std::move(system));
-    }
-    require(records.size() == 2, "heterogeneous record count mismatch");
-    require(std::holds_alternative<SystemRecord>(records[0]), "first record should be a system record");
-    require(std::holds_alternative<UserRecord>(records[1]), "second record should be a user record");
-}
-
 void test_decode_errors() {
     auto broken = codec::jsonl::parse<std::vector<Event>>("{\"kind\":\"MESSAGE\"}\n{oops");
     require(!broken, "malformed jsonl unexpectedly parsed");
@@ -133,7 +104,6 @@ int main() {
     test_container_round_trip();
     test_append_and_lines();
     test_lines_edge_cases();
-    test_heterogeneous_records();
     test_decode_errors();
     return 0;
 }

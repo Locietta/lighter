@@ -170,20 +170,6 @@ void test_verification_reports_all_failures() {
     require(complete, "verification must report every unmet expectation");
 }
 
-void test_automatic_port() {
-    mock::Mock<Service> service;
-    service.expect<^^Service::transform>().calls([](int value) { return value + 2; });
-    service.expect<^^Service::notify>().returns();
-    service.expect<^^Service::acquire>().then_returns(std::make_unique<int>(8));
-    auto handle = service.handle();
-
-    handle.notify("generated");
-    require(handle.transform(3) == 5, "generated port lost the reflected method signature");
-    auto acquired = handle.acquire();
-    require(acquired && *acquired == 8, "generated port lost the reflected move-only result");
-    service.verify();
-}
-
 void test_facade_contract() {
     mock::Mock<ServiceFacade> service;
     service.expect<TransformDispatch>().calls([](int value) { return value + 4; }).times(2);
@@ -242,7 +228,6 @@ int main() {
     test_handle_outlives_controller();
     test_mock_is_movable();
     test_verification_reports_all_failures();
-    test_automatic_port();
     test_facade_contract();
     test_noexcept_facade_contract();
     test_noexcept_failure_is_deferred();

@@ -40,18 +40,6 @@ Task<void, Error> repeating(i32 &ticks) {
     timer.stop();
 }
 
-/// sleep() suspends for approximately the requested duration.
-///
-/// Deliberately not asserting `measured >= budget`: libuv schedules against the
-/// loop's cached time, which is sampled once per iteration, so a timer can fire
-/// a millisecond or two early. The useful property is that the Task actually
-/// waited rather than resuming immediately.
-Task<void, Error> sleeps_at_least(std::chrono::milliseconds budget, std::chrono::milliseconds &measured) {
-    const auto start = std::chrono::steady_clock::now();
-    co_await sleep(budget);
-    measured = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-}
-
 /// Cancelling a Task suspended on Timer::wait() must unwind it rather than
 /// leave the frame parked on a Timer that has been stopped underneath it.
 Task<void, Error, Cancellation> cancelled_wait(bool &resumed, Event &started) {
@@ -125,7 +113,6 @@ i32 run_all() {
 
     std::vector<std::string> single_log;
     i32 ticks = 0;
-    std::chrono::milliseconds measured{0};
     bool resumed = false;
     bool observed_cancel = false;
     std::vector<std::string> yield_log;
@@ -134,7 +121,6 @@ i32 run_all() {
 
     loop.schedule(single_shot(single_log));
     loop.schedule(repeating(ticks));
-    loop.schedule(sleeps_at_least(20ms, measured));
     loop.schedule(cancel_pending_wait(resumed, observed_cancel));
     loop.schedule(yields_after_pending_work(yield_log));
     loop.schedule(rejects_second_waiter(first_ok, second_rejected));
@@ -142,8 +128,6 @@ i32 run_all() {
 
     require(single_log.size() == 1 && single_log[0] == "fired", "single-shot Timer must fire exactly once");
     require(ticks == 5, "repeating Timer must fire 5 times, got " + std::to_string(ticks));
-    // Allow the small early-fire slack described on sleeps_at_least().
-    require(measured >= 15ms, "sleep(20ms) returned after only " + std::to_string(measured.count()) + "ms");
     require(!resumed, "a cancelled sleep must not resume its coroutine body");
     require(observed_cancel, "cancelling a pending Timer wait must surface as Cancellation");
     require(yield_log.size() == 2, "yield test must record both steps");

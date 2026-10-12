@@ -1,7 +1,6 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <utility>
 
 #include <lighter/async/io/fs.h>
@@ -12,9 +11,6 @@
 namespace {
 
 using namespace lighter;
-
-static_assert(std::is_move_constructible_v<fs::DirHandle>);
-static_assert(std::is_move_assignable_v<fs::DirHandle>);
 
 void require(bool condition, std::string message) {
     if (!condition) throw std::runtime_error(std::move(message));

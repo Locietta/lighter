@@ -5,7 +5,6 @@
 #include <utility>
 #include <vector>
 
-#include <lighter/codec/json/json.h>
 #include <lighter/http/sse.h>
 #include <lighter/types.hpp>
 
@@ -54,21 +53,6 @@ std::vector<Event> parse_any_split(std::string_view stream) {
 
 // -- typical agentic CLI payloads ------------------------------------------
 
-/// OpenAI-compatible chat completion chunk (the shape liminal will decode per event)
-struct DeltaChunk {
-    struct Choice {
-        struct Delta {
-            std::optional<std::string> role;
-            std::optional<std::string> content;
-        };
-        Delta delta;
-        std::optional<std::string> finish_reason;
-        u32 index = 0;
-    };
-    std::string id;
-    std::vector<Choice> choices;
-};
-
 void test_openai_style_stream() {
     // data-only events, keep-alive comment, [DONE] sentinel — the wire format
     // of OpenAI-compatible endpoints (which most local gateways mimic)
@@ -87,30 +71,14 @@ void test_openai_style_stream() {
     auto events = parse_any_split(stream);
     require(events.size() == 5, "openai stream event count mismatch");
 
+    // payloads must arrive byte-for-byte; decoding them is the application's job
+    require(events[1].data == R"({"id":"c1","choices":[{"delta":{"content":"Hel"},"index":0}]})",
+            "data payload must pass through verbatim");
     // the [DONE] sentinel is application-level: parser must pass it through untouched
     require(events.back().data == "[DONE]", "sentinel event must pass through verbatim");
-
-    // decode the JSON payloads and reassemble the streamed message
-    std::string content;
-    std::optional<std::string> finish;
     for (const auto &event : events) {
-        if (event.data == "[DONE]") {
-            continue;
-        }
         require(event.event == "message", "data-only events default to type 'message'");
-        auto chunk = codec::json::parse<DeltaChunk>(event.data);
-        require(static_cast<bool>(chunk), chunk ? std::string() : std::string(chunk.error().message()));
-        for (const auto &choice : chunk->choices) {
-            if (choice.delta.content) {
-                content += *choice.delta.content;
-            }
-            if (choice.finish_reason) {
-                finish = choice.finish_reason;
-            }
-        }
     }
-    require(content == "Hello", "reassembled streamed content mismatch");
-    require(finish == std::optional<std::string>("stop"), "finish_reason not seen");
 }
 
 void test_anthropic_style_stream() {
@@ -132,26 +100,7 @@ void test_anthropic_style_stream() {
     require(events[0].event == "message_start", "event type mismatch");
     require(events[1].event == "content_block_delta" && events[2].event == "content_block_delta", "delta event types mismatch");
     require(events[3].event == "message_stop", "terminal event type mismatch");
-
-    struct BlockDelta {
-        std::string type;
-        struct Delta {
-            std::optional<std::string> text;
-        };
-        std::optional<Delta> delta;
-    };
-    std::string text;
-    for (const auto &event : events) {
-        if (event.event != "content_block_delta") {
-            continue;
-        }
-        auto delta = codec::json::parse<BlockDelta>(event.data);
-        require(static_cast<bool>(delta), "delta payload failed to decode");
-        if (delta->delta && delta->delta->text) {
-            text += *delta->delta->text;
-        }
-    }
-    require(text == "Hi!", "anthropic delta reassembly mismatch");
+    require(events[2].data == R"({"type":"content_block_delta","delta":{"text":"!"}})", "named events must keep their data verbatim");
 }
 
 void test_multiline_data() {
