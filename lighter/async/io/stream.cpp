@@ -315,6 +315,11 @@ Task<std::string, Error> Stream::read() {
     }
 
     if (self->buffer.readable_bytes() == 0) {
+        // Single reader: a second waiter would replace the first, which
+        // then never resumes.
+        if (self->reader.has_waiter()) {
+            co_await fail(Error::k_connection_already_in_progress);
+        }
         if (auto err = co_await StreamReadAwait{self.get()}) {
             co_await fail(err);
         }
@@ -342,6 +347,10 @@ Task<usize, Error> Stream::read_some(std::span<char> dst) {
         co_return to_read;
     }
 
+    if (self->reader.has_waiter()) {
+        co_await fail(Error::k_connection_already_in_progress);
+    }
+
     co_return co_await StreamReadSomeAwait{self.get(), dst};
 }
 
@@ -352,6 +361,9 @@ Task<Stream::Chunk, Error> Stream::read_chunk() {
     }
 
     if (self->buffer.readable_bytes() == 0) {
+        if (self->reader.has_waiter()) {
+            co_await fail(Error::k_connection_already_in_progress);
+        }
         if (auto err = co_await StreamReadAwait{self.get()}) {
             co_await fail(err);
         }
