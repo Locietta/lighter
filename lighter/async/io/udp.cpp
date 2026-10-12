@@ -21,7 +21,7 @@ struct Udp::Self : uv::handle<Udp::Self, uv_udp_t> {
     std::vector<char> buffer;
     bool receiving = false;
 
-    uv::StoredDelivery<Error> send;
+    uv::WaiterBinding<Error> send;
     bool send_inflight = false;
 };
 
@@ -247,16 +247,12 @@ struct UdpSendAwait : uv::AwaitOp<UdpSendAwait> {
         // marks the op before invoking on_cancel.
         auto ec = uv::status_to_error(status);
 
-        u->send.deliver(std::move(ec));
+        // The waiter stays armed until this callback (a send cannot be
+        // cancelled), so there is never a result to keep for a later send.
+        u->send.try_deliver(std::move(ec));
     }
 
-    bool await_ready() noexcept {
-        if (self && self->send.has_pending()) {
-            result = self->send.take_pending();
-            return true;
-        }
-        return false;
-    }
+    bool await_ready() const noexcept { return false; }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_t> waiting,
                                           std::source_location loc = std::source_location::current()) noexcept {
