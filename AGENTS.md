@@ -15,3 +15,5 @@ C++ dependencies should be managed by xmake. Headers and module interfaces must 
 Versions follow semver (0.x for now: breaking changes bump the minor). Consumers pin a released version. To release: bump `version` in `pixi.toml`, tag `vX.Y.Z`, update the recipe's `add_versions` in `Locietta/xmake-repo`, and bump the consumers. Consumers can build against a local checkout with `LIGHTER_SOURCE_DIR`.
 
 Commit headlines follow `<type>(<scope>): <subject>`.
+
+Working documents (reviews, audits, investigation logs, plans) are read-once reports, not project history: keep them under `docs/working/`, which ignores itself via a local `.gitignore`, and never commit them. Move anything with lasting value into code, tests or the real docs instead.
