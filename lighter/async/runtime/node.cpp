@@ -1,6 +1,8 @@
 #include "node.h"
 
 #include <contracts>
+#include <exception>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -28,6 +30,30 @@ void drain_pending_destroys() {
     }
 }
 #endif
+
+/// A detached root Task failed and nothing can observe it: it has no parent,
+/// and nobody holds the Task object to call result(). Like an exception
+/// escaping a std::thread, that is fatal rather than silently dropped.
+[[noreturn]] void panic_unobserved_failure(const TaskFrame &frame) noexcept {
+    std::string message = "a detached Task failed and nothing observed it";
+#if LIGHTER_ENABLE_EXCEPTIONS
+    if (frame.propagated_exception) {
+        try {
+            std::rethrow_exception(frame.propagated_exception);
+        } catch (const std::exception &error) {
+            message += ": ";
+            message += error.what();
+        } catch (...) {
+            message += ": non-standard exception";
+        }
+    } else {
+        message += ": it returned an Error";
+    }
+#else
+    message += ": it returned an Error";
+#endif
+    lighter::panic(message, frame.location);
+}
 
 } // namespace
 
@@ -331,6 +357,9 @@ std::coroutine_handle<> AsyncNode::finalize() {
             auto self = static_cast<TaskFrame *>(this);
             if (!self->parent) {
                 if (self->root) {
+                    if (self->state == FAILED) {
+                        panic_unobserved_failure(*self);
+                    }
 #if LIGHTER_WORKAROUND_MSVC_COROUTINE_ASAN_UAF
                     pending_frame_destroys.push_back(self->handle());
 #else
